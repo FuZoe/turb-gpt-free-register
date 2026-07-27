@@ -2,6 +2,7 @@
 """通过 CloakBrowser + Playwright 适配层执行 ChatGPT 注册。"""
 from __future__ import annotations
 
+import json
 import logging
 import time
 from pathlib import Path
@@ -21,6 +22,32 @@ from core.roxy_registration import (  # noqa: F401
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _capture_cloak_failure_diagnostics(driver, batch_dir: Path | None = None) -> None:
+    """在注册异常后采集旁路诊断；任何采集错误都只记日志。"""
+    if driver is None:
+        return
+    try:
+        snapshot = driver.diagnostic_snapshot()
+        rendered = json.dumps(snapshot, ensure_ascii=False, default=str)
+        logger.error("[Cloak诊断] 失败现场快照：%s", rendered[:20000])
+    except Exception as exc:
+        logger.warning("[Cloak诊断] 页面/网络快照采集失败：%s: %s", type(exc).__name__, str(exc)[:300])
+
+    try:
+        root = (
+            Path(batch_dir) / "cloak-diagnostics"
+            if batch_dir
+            else Path(__file__).resolve().parent.parent / "注册日志" / "cloak-diagnostics"
+        )
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        millis = int(time.time() * 1000) % 1000
+        screenshot_path = root / f"cloak-failure-{stamp}-{millis:03d}.png"
+        saved = driver.save_diagnostic_screenshot(screenshot_path)
+        logger.error("[Cloak诊断] 失败现场截图：%s", saved)
+    except Exception as exc:
+        logger.warning("[Cloak诊断] 截图保存失败：%s: %s", type(exc).__name__, str(exc)[:300])
 
 
 def run_cloak_registration(email: str, name: str, birthday: str, proxy: str = None, otp_code: str = None, batch_dir: Path | None = None) -> dict:
@@ -145,6 +172,7 @@ def run_cloak_registration(email: str, name: str, birthday: str, proxy: str = No
     except Exception as exc:
         logger.error("[Cloak注册] 失败：%s: %s", type(exc).__name__, exc)
         logger.debug("[Cloak注册] 失败详情", exc_info=True)
+        _capture_cloak_failure_diagnostics(driver, batch_dir=batch_dir)
         try:
             from core.email_provider import release_email
             release_email(email, status="failed" if create_acknowledged else "available", note=f"Cloak注册失败: {str(exc)[:180]}")

@@ -6,7 +6,9 @@ import logging
 import re
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from config import cloakbrowser as _cfg
 
@@ -132,6 +134,167 @@ class CloakSeleniumDriver:
         self.page = page
         self._page_load_timeout_ms = int(getattr(_cfg, "CLOAK_SELENIUM_TIMEOUT", 90) or 90) * 1000
         self.switch_to = _SwitchTo(self)
+        self._diagnostic_pages: set[int] = set()
+        self._request_failures: list[dict] = []
+        self._http_errors: list[dict] = []
+        self._console_errors: list[dict] = []
+        self._page_errors: list[dict] = []
+        self._attach_diagnostics(self.page)
+
+    @staticmethod
+    def _safe_diagnostic_url(value: Any) -> str:
+        """移除查询参数和片段，避免诊断日志带出邮箱、令牌等信息。"""
+        raw = str(value or "")
+        try:
+            parsed = urlsplit(raw)
+            if parsed.scheme and parsed.netloc:
+                return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"[:1000]
+        except Exception:
+            pass
+        return raw.split("?", 1)[0].split("#", 1)[0][:1000]
+
+    @staticmethod
+    def _event_value(obj: Any, name: str, default: Any = None) -> Any:
+        value = getattr(obj, name, default)
+        if callable(value):
+            try:
+                return value()
+            except Exception:
+                return default
+        return value
+
+    @staticmethod
+    def _append_diagnostic(target: list[dict], item: dict, limit: int = 100) -> None:
+        target.append(item)
+        if len(target) > limit:
+            del target[:-limit]
+
+    def _attach_diagnostics(self, page: Any) -> None:
+        """给页面挂旁路监听器；监听失败不得影响注册流程。"""
+        page_id = id(page)
+        if page_id in self._diagnostic_pages:
+            return
+        self._diagnostic_pages.add(page_id)
+
+        def on_request_failed(request: Any) -> None:
+            failure = self._event_value(request, "failure", "")
+            self._append_diagnostic(
+                self._request_failures,
+                {
+                    "at": round(time.time(), 3),
+                    "method": str(self._event_value(request, "method", "") or ""),
+                    "type": str(self._event_value(request, "resource_type", "") or ""),
+                    "url": self._safe_diagnostic_url(self._event_value(request, "url", "")),
+                    "failure": str(failure or "")[:500],
+                },
+            )
+
+        def on_response(response: Any) -> None:
+            try:
+                status = int(self._event_value(response, "status", 0) or 0)
+            except Exception:
+                return
+            if status < 400:
+                return
+            request = self._event_value(response, "request", None)
+            self._append_diagnostic(
+                self._http_errors,
+                {
+                    "at": round(time.time(), 3),
+                    "status": status,
+                    "method": str(self._event_value(request, "method", "") or ""),
+                    "type": str(self._event_value(request, "resource_type", "") or ""),
+                    "url": self._safe_diagnostic_url(self._event_value(response, "url", "")),
+                },
+            )
+
+        def on_console(message: Any) -> None:
+            level = str(self._event_value(message, "type", "") or "").lower()
+            if level not in {"error", "warning"}:
+                return
+            location = self._event_value(message, "location", {}) or {}
+            location_url = location.get("url", "") if isinstance(location, dict) else ""
+            self._append_diagnostic(
+                self._console_errors,
+                {
+                    "at": round(time.time(), 3),
+                    "level": level,
+                    "text": str(self._event_value(message, "text", "") or "")[:1000],
+                    "url": self._safe_diagnostic_url(location_url),
+                },
+            )
+
+        def on_page_error(error: Any) -> None:
+            self._append_diagnostic(
+                self._page_errors,
+                {"at": round(time.time(), 3), "error": str(error or "")[:1000]},
+                limit=50,
+            )
+
+        for event_name, callback in (
+            ("requestfailed", on_request_failed),
+            ("response", on_response),
+            ("console", on_console),
+            ("pageerror", on_page_error),
+        ):
+            try:
+                page.on(event_name, callback)
+            except Exception as exc:
+                logger.debug("[Cloak诊断] 挂载 %s 监听器失败：%s", event_name, exc)
+
+    def diagnostic_snapshot(self) -> dict:
+        """返回脱敏页面状态及最近的网络/控制台异常。"""
+        page_state: dict = {}
+        collection_error = None
+        try:
+            page_state = self.page.evaluate(
+                """() => {
+                  const visible = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+                  return {
+                    url: location.href,
+                    title: document.title,
+                    readyState: document.readyState,
+                    bodyPreview: (document.body?.innerText || '').slice(0, 2000),
+                    inputs: [...document.querySelectorAll('input')].filter(visible).slice(0, 40).map((el) => ({
+                      type: el.type || '',
+                      name: el.name || '',
+                      autocomplete: el.autocomplete || '',
+                      filled: !!el.value,
+                      valueLength: (el.value || '').length,
+                      disabled: !!el.disabled
+                    })),
+                    actions: [...document.querySelectorAll('button,a,[role="button"],input[type="submit"]')]
+                      .filter(visible).slice(0, 40).map((el) => ({
+                        tag: el.tagName.toLowerCase(),
+                        role: el.getAttribute('role') || '',
+                        text: (el.innerText || el.value || el.getAttribute('aria-label') || '').trim().slice(0, 160),
+                        disabled: !!el.disabled || el.getAttribute('aria-disabled') === 'true'
+                      }))
+                  };
+                }"""
+            ) or {}
+        except Exception as exc:
+            collection_error = f"{type(exc).__name__}: {str(exc)[:500]}"
+
+        if isinstance(page_state, dict):
+            page_state["url"] = self._safe_diagnostic_url(
+                page_state.get("url") or getattr(self.page, "url", "")
+            )
+        return {
+            "page": page_state,
+            "collection_error": collection_error,
+            "request_failures": list(self._request_failures),
+            "http_errors": list(self._http_errors),
+            "console_errors": list(self._console_errors),
+            "page_errors": list(self._page_errors),
+        }
+
+    def save_diagnostic_screenshot(self, path: str | Path) -> str:
+        """保存失败现场截图，返回最终路径。"""
+        output = Path(path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        self.page.screenshot(path=str(output), full_page=True, timeout=15000)
+        return str(output)
 
     @property
     def current_url(self) -> str:
@@ -161,6 +324,7 @@ class CloakSeleniumDriver:
         pages = self._pages()
         idx = int(handle)
         self.page = pages[idx]
+        self._attach_diagnostics(self.page)
         try:
             self.page.bring_to_front()
         except Exception:
