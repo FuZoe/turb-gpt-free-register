@@ -77,7 +77,7 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "CLOAK_ENABLE_PASSWORD", "file": "cloakbrowser.py", "type": "bool", "group": "CloakBrowser",
-        "label": "Cloak设置登录密码", "help": "开启后优先进入密码创建页；REGISTER_PASSWORD 留空时自动生成强密码",
+        "label": "Cloak设置登录密码", "help": "开启后复用 Turb 纯协议密码分支；REGISTER_PASSWORD 留空时自动生成强密码",
     },
     {
         "key": "CLOAK_LICENSE_KEY", "file": "cloakbrowser.py", "type": "str", "group": "CloakBrowser",

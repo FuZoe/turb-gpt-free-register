@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import logging
+import secrets
+import string
 from typing import Any
 
+from config import register as _register_cfg
 from core.session import BrowserSession
 
 logger = logging.getLogger(__name__)
@@ -30,6 +33,20 @@ def _browser_identity(driver: Any) -> dict:
               userAgent: navigator.userAgent || '',
               language: navigator.language || '',
               languages: Array.isArray(navigator.languages) ? navigator.languages : [],
+              platform: navigator.platform || '',
+              vendor: navigator.vendor || '',
+              hardwareConcurrency: navigator.hardwareConcurrency || 0,
+              deviceMemory: navigator.deviceMemory || 0,
+              screenWidth: screen.width || 0,
+              screenHeight: screen.height || 0,
+              devicePixelRatio: window.devicePixelRatio || 1,
+              timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || '',
+              timezoneOffset: new Date().getTimezoneOffset(),
+              userAgentData: navigator.userAgentData ? {
+                brands: navigator.userAgentData.brands || [],
+                mobile: !!navigator.userAgentData.mobile,
+                platform: navigator.userAgentData.platform || ''
+              } : null,
               deviceId
             };
             """
@@ -82,6 +99,42 @@ def build_browser_session_from_cloak(driver: Any, proxy_url: str | None) -> Brow
         session.browser_profile["navigator_language"] = language
     if languages:
         session.browser_profile["accept_language"] = ",".join(languages)
+        session.browser_profile["navigator_languages"] = languages
+
+    profile_map = {
+        "navigator_platform": identity.get("platform"),
+        "navigator_vendor": identity.get("vendor"),
+        "hardware_concurrency": identity.get("hardwareConcurrency"),
+        "device_memory": identity.get("deviceMemory"),
+        "screen_width": identity.get("screenWidth"),
+        "screen_height": identity.get("screenHeight"),
+        "device_pixel_ratio": identity.get("devicePixelRatio"),
+        "timezone_iana": identity.get("timezone"),
+    }
+    for key, value in profile_map.items():
+        if value not in (None, "", 0):
+            session.browser_profile[key] = value
+    try:
+        session.browser_profile["timezone_offset_minutes"] = -int(identity.get("timezoneOffset"))
+    except (TypeError, ValueError):
+        pass
+
+    ua_data = identity.get("userAgentData")
+    if isinstance(ua_data, dict):
+        brands = [
+            item for item in (ua_data.get("brands") or [])
+            if isinstance(item, dict) and item.get("brand") and item.get("version")
+        ]
+        if brands:
+            session.browser_profile["send_client_hints"] = True
+            session.browser_profile["sec_ch_ua"] = ", ".join(
+                f'"{item["brand"]}";v="{item["version"]}"' for item in brands
+            )
+        platform = str(ua_data.get("platform") or "")
+        if platform:
+            session.browser_profile["sec_ch_ua_platform"] = f'"{platform}"'
+            session.browser_profile["user_agent_data_platform"] = platform
+        session.browser_profile["sec_ch_ua_mobile"] = "?1" if ua_data.get("mobile") else "?0"
 
     session._cf_cookie_seen = session.cf_cookie_snapshot()
     logger.info(
@@ -121,6 +174,70 @@ def sync_browser_session_to_cloak(driver: Any, session: BrowserSession) -> int:
         context.add_cookies(payload)
     logger.info("[Cloak会话] 已把 2FA 重认证 Cookie 写回浏览器：cookies=%s", len(payload))
     return len(payload)
+
+
+def _generate_registration_password(length: int = 14) -> str:
+    """生成同时包含大小写、数字和符号的注册密码。"""
+    alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
+    while True:
+        value = "".join(secrets.choice(alphabet) for _ in range(max(12, int(length))))
+        if (
+            any(ch.islower() for ch in value)
+            and any(ch.isupper() for ch in value)
+            and any(ch.isdigit() for ch in value)
+            and any(ch in "!@#$%^&*" for ch in value)
+        ):
+            return value
+
+
+def _registration_password() -> str:
+    configured = str(getattr(_register_cfg, "REGISTER_PASSWORD", "") or "").strip()
+    return configured or _generate_registration_password()
+
+
+def setup_cloak_password(driver: Any, email: str, proxy_url: str | None) -> str:
+    """复用纯协议密码分支，在 Cloak 已建立的认证态中创建登录密码。"""
+    from core.openai_auth import (
+        build_sentinel_header,
+        follow_password_registration,
+        get_create_account_page,
+        register_user,
+        request_sentinel_token,
+    )
+
+    session = build_browser_session_from_cloak(driver, proxy_url)
+    password = _registration_password()
+    try:
+        get_create_account_page(session)
+        challenge = request_sentinel_token(session, "username_password_create")
+        sentinel_header, so_header = build_sentinel_header(
+            session,
+            challenge,
+            "username_password_create",
+        )
+        result = register_user(
+            session,
+            email,
+            password,
+            sentinel_header,
+            so_header,
+        )
+        follow_password_registration(session, result)
+        sync_browser_session_to_cloak(driver, session)
+    finally:
+        try:
+            session.session.close()
+        except Exception:
+            pass
+
+    # 协议请求改变了服务端 auth step，写回 Cookie 后让 Cloak 重新加载 OTP 页。
+    driver.get("https://auth.openai.com/email-verification")
+    logger.info(
+        "[Cloak注册][协议密码] 密码创建完成并回写浏览器：email=%s password_length=%s",
+        email,
+        len(password),
+    )
+    return password
 
 
 def setup_cloak_2fa(driver: Any, email: str, proxy_url: str | None) -> str:

@@ -17,7 +17,6 @@ from core.humanize import delay as human_delay
 # 复用 Roxy 注册流程里已维护好的页面操作函数。
 from core.roxy_registration import (  # noqa: F401
     _maybe_accept, _submit_email_and_wait_next, _fill_password_page_if_present,
-    _switch_otp_to_password_page,
     _clear_otp_inputs, _type_otp, _click_continue, _wait_after_email_otp_submit,
     _click_resend_email_otp, _complete_profile_page, _fetch_chatgpt_session, _check_manual_stop,
 )
@@ -72,23 +71,13 @@ def run_cloak_registration(email: str, name: str, birthday: str, proxy: str = No
         _check_manual_stop()
 
         require_password = bool(getattr(_cfg, "CLOAK_ENABLE_PASSWORD", False))
-        if require_password and next_state == "otp":
-            logger.info("[Cloak注册] 密码模式已开启，正在从邮箱验证码页切换到密码创建页")
-            switch_result = _switch_otp_to_password_page(driver, timeout=20)
-            logger.info("[Cloak注册] 密码入口切换结果：%s", switch_result)
-            if not switch_result.get("ok"):
-                raise RuntimeError(f"密码模式已开启，但未进入密码创建页：{switch_result}")
-
         if require_password:
-            openai_password = _fill_password_page_if_present(
-                driver,
-                email,
-                timeout=30,
-                prefer_password=True,
-            )
-            if not openai_password:
-                raise RuntimeError("密码模式已开启，但本次注册未生成登录密码")
-            logger.info("[Cloak注册] 登录密码已创建并保存：%s（%s 位）", email, len(openai_password))
+            from core.cloakbrowser_session import setup_cloak_password
+
+            proxy_url = ((opened.raw or {}).get("proxy") if opened else None) or proxy or None
+            otp_after_ts = time.time()
+            logger.info("[Cloak注册][协议密码] 正在桥接 Cloak 认证态并调用纯协议密码分支")
+            openai_password = setup_cloak_password(driver, email, proxy_url)
         else:
             openai_password = None if next_state == "otp" else _fill_password_page_if_present(driver, email, timeout=25)
         _check_manual_stop()

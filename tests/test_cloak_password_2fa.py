@@ -1,11 +1,12 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from core.cloakbrowser_session import (
     build_browser_session_from_cloak,
+    setup_cloak_password,
     setup_cloak_2fa,
     sync_browser_session_to_cloak,
 )
-from core import roxy_registration
+from core.openai_auth import follow_password_registration, register_user
 from core.db import _account_credentials_line
 from webui.app import _account_secret_value
 from webui.config_editor import EDITABLE_FIELDS
@@ -41,6 +42,7 @@ class FakeDriver:
     def __init__(self):
         self.context = FakeContext()
         self.scripts = []
+        self.navigations = []
 
     def execute_script(self, script, *args):
         self.scripts.append((script, args))
@@ -49,9 +51,29 @@ class FakeDriver:
                 "userAgent": "CloakBrowser/Test",
                 "language": "ja-JP",
                 "languages": ["ja-JP", "ja", "en-US"],
+                "platform": "Win32",
+                "vendor": "Google Inc.",
+                "hardwareConcurrency": 8,
+                "deviceMemory": 8,
+                "screenWidth": 1920,
+                "screenHeight": 1080,
+                "devicePixelRatio": 1,
+                "timezone": "Asia/Tokyo",
+                "timezoneOffset": -540,
+                "userAgentData": {
+                    "brands": [
+                        {"brand": "Chromium", "version": "146"},
+                        {"brand": "Google Chrome", "version": "146"},
+                    ],
+                    "mobile": False,
+                    "platform": "Windows",
+                },
                 "deviceId": "browser-device-id",
             }
         return {"ok": True, "reason": "submitted_password"}
+
+    def get(self, url):
+        self.navigations.append(url)
 
 
 def test_cloak_session_bridge_copies_identity_cookie_and_proxy():
@@ -66,6 +88,11 @@ def test_cloak_session_bridge_copies_identity_cookie_and_proxy():
         assert session.device_id == "browser-device-id"
         assert session.browser_profile["user_agent"] == "CloakBrowser/Test"
         assert session.browser_profile["navigator_language"] == "ja-JP"
+        assert session.browser_profile["navigator_platform"] == "Win32"
+        assert session.browser_profile["timezone_iana"] == "Asia/Tokyo"
+        assert session.browser_profile["timezone_offset_minutes"] == 540
+        assert session.browser_profile["sec_ch_ua_platform"] == '"Windows"'
+        assert '"Chromium";v="146"' in session.browser_profile["sec_ch_ua"]
         assert "__Secure-next-auth.session-token=session-value" in session.chatgpt_cookie_header()
     finally:
         session.session.close()
@@ -93,36 +120,79 @@ def test_cloak_session_bridge_writes_protocol_cookies_back():
     )
 
 
-def test_prefer_password_does_not_click_passwordless_entry():
+def test_setup_cloak_password_reuses_protocol_chain_and_returns_to_otp_page():
     driver = FakeDriver()
+    session = build_browser_session_from_cloak(driver, "")
     with (
-        patch.object(roxy_registration, "_is_email_verification_page", side_effect=[False, True]),
-        patch.object(roxy_registration, "_has_access_token", return_value=False),
-        patch.object(roxy_registration, "_password_page_state", return_value={"url": "https://auth.openai.com/create-account/password"}),
-        patch.object(roxy_registration, "_is_signup_password_page", return_value=True),
-        patch.object(roxy_registration, "_is_login_password_page", return_value=False),
-        patch.object(roxy_registration, "_registration_password", return_value="StrongPass!234"),
-        patch.object(roxy_registration, "_click_passwordless_signup_if_present") as passwordless,
+        patch("core.cloakbrowser_session.build_browser_session_from_cloak", return_value=session),
+        patch("core.cloakbrowser_session._registration_password", return_value="StrongPass!234"),
+        patch("core.openai_auth.get_create_account_page") as password_page,
+        patch("core.openai_auth.request_sentinel_token", return_value={"token": "challenge"}) as sentinel,
+        patch("core.openai_auth.build_sentinel_header", return_value=("sentinel-header", "so-header")) as build,
+        patch("core.openai_auth.register_user", return_value={"continue_url": "/api/accounts/email-otp/send"}) as register,
+        patch("core.openai_auth.follow_password_registration", return_value="https://auth.openai.com/email-verification") as follow,
+        patch("core.cloakbrowser_session.sync_browser_session_to_cloak", return_value=3) as sync,
     ):
-        password = roxy_registration._fill_password_page_if_present(
-            driver,
-            "user@example.test",
-            timeout=1,
-            prefer_password=True,
-        )
+        password = setup_cloak_password(driver, "user@example.test", "")
 
     assert password == "StrongPass!234"
-    passwordless.assert_not_called()
-    assert driver.scripts[-1][1] == ("StrongPass!234",)
+    password_page.assert_called_once_with(session)
+    sentinel.assert_called_once_with(session, "username_password_create")
+    build.assert_called_once_with(session, {"token": "challenge"}, "username_password_create")
+    register.assert_called_once_with(
+        session,
+        "user@example.test",
+        "StrongPass!234",
+        "sentinel-header",
+        "so-header",
+    )
+    follow.assert_called_once_with(session, {"continue_url": "/api/accounts/email-otp/send"})
+    sync.assert_called_once_with(driver, session)
+    assert driver.navigations == ["https://auth.openai.com/email-verification"]
 
 
-def test_switch_from_otp_detects_signup_password_page():
-    driver = FakeDriver()
-    with patch.object(roxy_registration, "_is_signup_password_page", return_value=True):
-        result = roxy_registration._switch_otp_to_password_page(driver, timeout=1)
+def test_protocol_register_user_sends_sentinel_headers_and_password_body():
+    session = MagicMock()
+    session.get_auth_headers.return_value = {}
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"page": {"type": "email_otp_send"}}
+    session.post.return_value = response
 
-    assert result["ok"] is True
-    assert result["password_page"] == "signup"
+    result = register_user(
+        session,
+        "user@example.test",
+        "StrongPass!234",
+        "sentinel-header",
+        "so-header",
+    )
+
+    assert result["page"]["type"] == "email_otp_send"
+    _, kwargs = session.post.call_args
+    assert kwargs["headers"]["openai-sentinel-token"] == "sentinel-header"
+    assert kwargs["headers"]["openai-sentinel-so-token"] == "so-header"
+    assert '"password": "StrongPass!234"' in kwargs["data"]
+
+
+def test_protocol_password_flow_follows_relative_otp_url():
+    session = MagicMock()
+    session.get_auth_navigate_headers.return_value = {}
+    response = MagicMock(status_code=200)
+    response.url = "https://auth.openai.com/email-verification"
+    session.get.return_value = response
+
+    final_url = follow_password_registration(
+        session,
+        {
+            "continue_url": "/api/accounts/email-otp/send",
+            "method": "GET",
+            "page": {"type": "email_otp_send"},
+        },
+    )
+
+    assert final_url == "https://auth.openai.com/email-verification"
+    args, kwargs = session.get.call_args
+    assert args[0] == "https://auth.openai.com/api/accounts/email-otp/send"
+    assert kwargs["allow_redirects"] is True
 
 
 def test_setup_cloak_2fa_validates_session_and_syncs_cookies():

@@ -19,8 +19,8 @@ CLOAK_TIMEZONE: str = ""
 # 是否把本项目传入/代理池抽取的代理传给 CloakBrowser。
 CLOAK_USE_PROXY: bool = True
 
-# 注册时要求走密码创建流程。开启后会从 OTP 页面切换到密码页；
-# REGISTER_PASSWORD 留空时自动生成强密码。
+# 注册时要求走密码创建流程。开启后把 Cloak 认证态桥接到 Turb 纯协议密码分支；
+# REGISTER_PASSWORD 留空时自动生成强密码，再把协议 Cookie 写回浏览器。
 CLOAK_ENABLE_PASSWORD: bool = False
 
 # Pro license；留空则使用免费 binary。
