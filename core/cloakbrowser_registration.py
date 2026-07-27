@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 from pathlib import Path
 
@@ -50,7 +51,7 @@ def _capture_cloak_failure_diagnostics(driver, batch_dir: Path | None = None) ->
         logger.warning("[Cloak诊断] 截图保存失败：%s: %s", type(exc).__name__, str(exc)[:300])
 
 
-def run_cloak_registration(email: str, name: str, birthday: str, proxy: str = None, otp_code: str = None, batch_dir: Path | None = None) -> dict:
+def _run_cloak_registration_impl(email: str, name: str, birthday: str, proxy: str = None, otp_code: str = None, batch_dir: Path | None = None) -> dict:
     """CloakBrowser 自动化注册入口。"""
     driver = None
     opened = None
@@ -236,3 +237,43 @@ def run_cloak_registration(email: str, name: str, birthday: str, proxy: str = No
                 driver.quit()
             except Exception:
                 pass
+
+
+def run_cloak_registration(email: str, name: str, birthday: str, proxy: str = None, otp_code: str = None, batch_dir: Path | None = None) -> dict:
+    """在一次性隔离线程中运行完整 Cloak 生命周期。
+
+    Playwright Sync API 与创建它的线程绑定；WebUI 长驻线程池可能被其他任务留下的
+    asyncio 状态污染。每个 Cloak 任务都使用新线程，结束后整条 Playwright 状态随
+    线程释放，同时沿用父线程名以保持任务日志过滤有效。
+    """
+    result_box: dict = {}
+    error_box: dict = {}
+    parent_thread_name = threading.current_thread().name
+
+    def _target() -> None:
+        try:
+            result_box["value"] = _run_cloak_registration_impl(
+                email=email,
+                name=name,
+                birthday=birthday,
+                proxy=proxy,
+                otp_code=otp_code,
+                batch_dir=batch_dir,
+            )
+        except BaseException as exc:  # noqa: BLE001 - 跨线程原样回传
+            error_box["error"] = exc
+
+    worker = threading.Thread(
+        target=_target,
+        name=parent_thread_name,
+        daemon=False,
+    )
+    worker.start()
+    worker.join()
+    if "error" in error_box:
+        raise error_box["error"]
+    return result_box.get("value") or {
+        "success": False,
+        "email": email,
+        "error": "Cloak 隔离线程未返回任务结果",
+    }

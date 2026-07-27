@@ -1,5 +1,7 @@
+import threading
 from unittest.mock import MagicMock, patch
 
+from core import cloakbrowser_registration
 from core.cloakbrowser_session import (
     build_browser_session_from_cloak,
     setup_cloak_password,
@@ -96,6 +98,34 @@ def test_cloak_session_bridge_copies_identity_cookie_and_proxy():
         assert "__Secure-next-auth.session-token=session-value" in session.chatgpt_cookie_header()
     finally:
         session.session.close()
+
+
+def test_cloak_registration_uses_fresh_thread_and_preserves_log_thread_name():
+    caller_ident = threading.get_ident()
+    caller_name = threading.current_thread().name
+
+    def fake_impl(**kwargs):
+        return {
+            "success": True,
+            "thread_ident": threading.get_ident(),
+            "thread_name": threading.current_thread().name,
+            "email": kwargs["email"],
+        }
+
+    with patch.object(
+        cloakbrowser_registration,
+        "_run_cloak_registration_impl",
+        side_effect=fake_impl,
+    ):
+        result = cloakbrowser_registration.run_cloak_registration(
+            "user@example.test",
+            "Test User",
+            "1990-01-01",
+        )
+
+    assert result["success"] is True
+    assert result["thread_ident"] != caller_ident
+    assert result["thread_name"] == caller_name
 
 
 def test_cloak_session_bridge_writes_protocol_cookies_back():
