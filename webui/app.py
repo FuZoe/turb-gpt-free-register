@@ -84,6 +84,7 @@ def _compact_account_for_list(row: dict) -> dict:
         "id": row.get("id"),
         "email": row.get("email"),
         "has_access_token": bool(str(row.get("access_token") or "").strip()),
+        "has_registration_password": bool(str(row.get("registration_password") or "").strip()),
         "totp_enabled": bool(row.get("totp_secret")),
         "codex_agent_has_token": bool(str(row.get("codex_agent_token") or "").strip()),
     }
@@ -132,9 +133,12 @@ def _account_secret_value(row: dict, field: str) -> str:
         return str(row.get("access_token") or "")
     if field == "copy_line":
         return str(row.get("copy_line") or "")
+    if field == "credentials_line":
+        from core.db import _account_credentials_line
+        return _account_credentials_line(row)
     if field == "codex_agent_token":
         return str(row.get("codex_agent_token") or "")
-    raise ValueError("field 仅支持 access_token/copy_line/codex_agent_token")
+    raise ValueError("field 仅支持 access_token/copy_line/credentials_line/codex_agent_token")
 
 
 def _compact_job_for_list(row: dict) -> dict:

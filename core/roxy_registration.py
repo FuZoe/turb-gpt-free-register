@@ -1075,7 +1075,81 @@ def _click_passwordless_signup_if_present(driver) -> dict:
         return {"ok": False, "reason": f"{type(exc).__name__}: {exc}"}
 
 
-def _fill_password_page_if_present(driver, email: str, timeout: int = 25) -> str | None:
+def _switch_otp_to_password_page(driver, timeout: int = 20) -> dict:
+    """从邮箱 OTP 页切换到密码注册页，供要求创建密码的浏览器流程使用。"""
+    try:
+        result = driver.execute_script(r"""
+        const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+          && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none';
+        const enabled = el => !el.disabled && String(el.getAttribute('aria-disabled') || '').toLowerCase() !== 'true';
+        const norm = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+          .replace(/\s+/g, ' ').trim().toLowerCase();
+        const candidates = [...document.querySelectorAll('button,a,input[type="submit"],[role="button"],[role="link"]')]
+          .filter(el => visible(el) && enabled(el));
+        const matchesPassword = el => {
+          const name = norm(el.getAttribute('name'));
+          const value = norm(el.getAttribute('value'));
+          const text = norm(el.textContent || el.getAttribute('value') || el.getAttribute('aria-label'));
+          const attrs = norm([
+            el.id, name, value, el.getAttribute('aria-label'), el.getAttribute('title'),
+            el.getAttribute('data-testid'), el.getAttribute('data-dd-action-name')
+          ].join(' '));
+          if (/resend|send again|forgot|reset|重新发送|重发|再送信|gui lai/.test(`${text} ${attrs}`)) return false;
+          return (
+            (name === 'intent' && value.includes('password') && !value.includes('passwordless')) ||
+            attrs.includes('continue_with_password') ||
+            attrs.includes('use_password') ||
+            text.includes('continue with password') ||
+            text.includes('use password') ||
+            text.includes('set a password') ||
+            text.includes('create password') ||
+            text.includes('使用密码继续') ||
+            text.includes('继续使用密码') ||
+            text.includes('设置密码') ||
+            text.includes('パスワードで続行') ||
+            text.includes('パスワードを使用') ||
+            text.includes('tiep tuc voi mat khau') ||
+            text.includes('dung mat khau')
+          );
+        };
+        const button = candidates.find(matchesPassword);
+        if (!button) return {ok:false, reason:'missing_password_entry'};
+        button.scrollIntoView({block:'center'});
+        const form = button.closest('form');
+        try {
+          button.dispatchEvent(new MouseEvent('pointerdown', {bubbles:true, cancelable:true, view:window}));
+          button.dispatchEvent(new MouseEvent('mousedown', {bubbles:true, cancelable:true, view:window}));
+          button.dispatchEvent(new MouseEvent('mouseup', {bubbles:true, cancelable:true, view:window}));
+          button.click();
+        } catch (e) {
+          if (form && typeof form.requestSubmit === 'function') form.requestSubmit(button);
+          else if (form) form.submit();
+          else throw e;
+        }
+        return {
+          ok:true,
+          reason:'clicked_password_entry',
+          name: button.getAttribute('name') || '',
+          value: button.getAttribute('value') || '',
+          text: (button.textContent || '').trim().slice(0, 80)
+        };
+        """) or {"ok": False, "reason": "empty_result"}
+    except Exception as exc:
+        return {"ok": False, "reason": f"{type(exc).__name__}: {exc}"}
+
+    if not result.get("ok"):
+        return result
+    end = time.time() + timeout
+    while time.time() < end:
+        if _is_signup_password_page(driver):
+            return {**result, "password_page": "signup"}
+        if _is_login_password_page(driver):
+            return {**result, "password_page": "login"}
+        time.sleep(0.5)
+    return {**result, "ok": False, "reason": "password_page_timeout"}
+
+
+def _fill_password_page_if_present(driver, email: str, timeout: int = 25, *, prefer_password: bool = False) -> str | None:
     """邮箱提交后兼容 create-account/password。返回本次设置的 OpenAI 账号密码；未遇到密码页返回 None。"""
     end = time.time() + timeout
     last = {}
@@ -1090,21 +1164,24 @@ def _fill_password_page_if_present(driver, email: str, timeout: int = 25) -> str
         if not (is_signup_password or is_login_password):
             time.sleep(0.5)
             continue
-        passwordless = _click_passwordless_signup_if_present(driver)
-        if passwordless.get('ok'):
-            logger.info("%s 检测到 password 页，已点击一次性验证码入口：email=%s detail=%s", _log_prefix(driver), email, passwordless)
-            wait_end = time.time() + 20
-            while time.time() < wait_end:
-                if _is_email_verification_page(driver):
-                    logger.info("%s 一次性验证码入口已进入邮箱验证码页", _log_prefix(driver))
-                    return None
-                if _has_access_token(driver):
-                    logger.info("%s 一次性验证码入口后已检测到登录态", _log_prefix(driver))
-                    return None
-                time.sleep(0.5)
-            logger.info("%s 已点击一次性验证码入口，未立即检测到 OTP 页，交给后续 OTP 阶段继续处理", _log_prefix(driver))
-            return None
+        if not prefer_password:
+            passwordless = _click_passwordless_signup_if_present(driver)
+            if passwordless.get('ok'):
+                logger.info("%s 检测到 password 页，已点击一次性验证码入口：email=%s detail=%s", _log_prefix(driver), email, passwordless)
+                wait_end = time.time() + 20
+                while time.time() < wait_end:
+                    if _is_email_verification_page(driver):
+                        logger.info("%s 一次性验证码入口已进入邮箱验证码页", _log_prefix(driver))
+                        return None
+                    if _has_access_token(driver):
+                        logger.info("%s 一次性验证码入口后已检测到登录态", _log_prefix(driver))
+                        return None
+                    time.sleep(0.5)
+                logger.info("%s 已点击一次性验证码入口，未立即检测到 OTP 页，交给后续 OTP 阶段继续处理", _log_prefix(driver))
+                return None
         if is_login_password:
+            if prefer_password:
+                raise RuntimeError(f"密码模式进入了登录密码页而非创建密码页：state={last}")
             logger.info("%s 当前是登录密码页但未找到一次性验证码入口，跳过密码填写并交给 OTP 阶段：state=%s", _log_prefix(driver), last)
             return None
         password = _registration_password()

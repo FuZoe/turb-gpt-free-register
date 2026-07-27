@@ -76,6 +76,10 @@ EDITABLE_FIELDS = [
         "label": "Cloak使用代理", "help": "把本项目传入或代理池抽取的代理传给 CloakBrowser",
     },
     {
+        "key": "CLOAK_ENABLE_PASSWORD", "file": "cloakbrowser.py", "type": "bool", "group": "CloakBrowser",
+        "label": "Cloak设置登录密码", "help": "开启后优先进入密码创建页；REGISTER_PASSWORD 留空时自动生成强密码",
+    },
+    {
         "key": "CLOAK_LICENSE_KEY", "file": "cloakbrowser.py", "type": "str", "group": "CloakBrowser",
         "label": "Cloak License", "help": "Pro license；留空使用免费 binary",
     },
@@ -278,6 +282,11 @@ EDITABLE_FIELDS = [
     {
         "key": "REGISTER_EMAIL", "file": "register.py", "type": "str", "group": "邮箱 / OTP",
         "label": "手动注册邮箱", "help": "USE_EMAIL_SERVICE=False 时必填。例如你的 outlook.com 地址；OTP 去网页邮箱看，再回任务页提交",
+    },
+    {
+        "key": "REGISTER_PASSWORD", "file": "register.py", "type": "str", "group": "邮箱 / OTP",
+        "label": "ChatGPT注册密码", "help": "Cloak设置登录密码开启时使用；留空则每个账号自动生成强密码",
+        "storage": "env", "secret": True,
     },
     {
         "key": "REGISTER_NAME", "file": "register.py", "type": "str", "group": "邮箱 / OTP",

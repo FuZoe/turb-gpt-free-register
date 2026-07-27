@@ -24,6 +24,7 @@ EXPLICIT_EMPTY_LIST_ENV_KEYS = {"PROXY_POOL"}
 SECRET_ENV_KEYS: dict[str, str] = {
     "WEBUI_AUTH_CODE": "WebUI 登录授权码",
     "WEBUI_SESSION_SECRET": "WebUI Session Cookie 签名密钥",
+    "REGISTER_PASSWORD": "ChatGPT 注册密码",
     "BROWSER_USE_API_KEY": "Browser Use Cloud API Key",
     "SKYVERN_API_KEY": "Skyvern API Key",
     "ROXY_API_TOKEN": "RoxyBrowser 本地 API Token",

@@ -296,6 +296,7 @@ CLOAK_HUMANIZE = True           # 人工鼠标/键盘/滚动行为
 CLOAK_GEOIP = True              # 按当前出口 IP 自动匹配语言/时区/WebRTC
 CLOAK_LOCALE = ""               # 留空自动；也可强制如 ja-JP / en-US
 CLOAK_TIMEZONE = ""             # 留空自动；也可强制如 Asia/Tokyo
+CLOAK_ENABLE_PASSWORD = True    # 从 OTP 页切换到密码创建页并设置登录密码
 CLOAK_LICENSE_KEY = ""          # 留空使用免费 binary；填 Pro key 使用最新版
 CLOAK_FINGERPRINT_SEED = ""     # 留空每次随机；固定值=固定指纹
 CLOAK_USER_DATA_DIR = ""        # 留空临时环境；填路径可持久化 profile
@@ -304,6 +305,9 @@ CLOAK_USER_DATA_DIR = ""        # 留空临时环境；填路径可持久化 pro
 说明：
 
 - `CLOAK_GEOIP=True` 会按当前出口 IP 自动生成 `locale / timezone / Accept-Language`，并传给 CloakBrowser 与 Playwright context。
+- `CLOAK_ENABLE_PASSWORD=True` 时使用 `REGISTER_PASSWORD`；留空则为每个账号生成 14 位强密码。
+- `ENABLE_2FA=True` 时会把 Cloak 登录态桥接到同代理的 `BrowserSession`，完成二次邮箱 OTP、TOTP enroll/activate，再把新 Cookie 写回 Cloak。
+- Cloak 密码或 2FA 任一步未完成时，任务会明确标记失败，不会把缺少密码/TOTP 的账号显示为完整成功。
 - 如果你通过项目代理池使用代理，请在 `config/proxy.py` 的 `PROXY_POOL` 填写代理；如果你使用系统代理/VPN，也会按当前实际出口 IP 自动定位。
 - 免费版没有在项目侧限制窗口数；本项目每个注册任务会启动一个 CloakBrowser 实例，即一个实例一套指纹。
 - WebUI 中，`Codex授权驱动` 位于「CPA / Codex」分组，对应 `config/codex.py` 的 `CODEX_OAUTH_DRIVER`。
@@ -524,13 +528,13 @@ python tools/test_codex_oauth.py --email <已注册邮箱> --verbose
 
 ## 注册密码说明
 
-Roxy 注册如果遇到新版流程：
+Roxy / Cloak 注册如果遇到新版流程：
 
 ```text
 /create-account/password
 ```
 
-会自动设置密码。
+会自动设置密码。Cloak 还可通过 `CLOAK_ENABLE_PASSWORD=True` 从邮箱 OTP 页面主动切换到密码创建页。
 
 密码来源：
 
@@ -545,6 +549,7 @@ REGISTER_PASSWORD = "你的固定密码"
 保存位置：
 
 - 账号 `extra_json.registration_password`
+- 账号顶层 `registration_password`，WebUI 账号页可点“复制密码2FA”
 - 批次归档 `accounts/YYYYMMDD-.../注册成功账号.json` 的 `extra.registration_password`
 
 注意：账号表里的 `password` 字段仍用于 Outlook 邮箱素材密码，不会被 OpenAI 注册密码覆盖。

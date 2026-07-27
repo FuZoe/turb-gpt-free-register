@@ -104,6 +104,15 @@ def _account_line(row: dict) -> str:
     return f"{base}----{token}----{totp}" if totp else f"{base}----{token}"
 
 
+def _account_credentials_line(row: dict) -> str:
+    """生成邮箱----ChatGPT密码----TOTP，缺失字段保留为空。"""
+    return "----".join([
+        row.get("email") or "",
+        row.get("registration_password") or "",
+        row.get("totp_secret") or "",
+    ])
+
+
 def _registered_email_line(row: dict) -> str:
     """生成注册成功邮箱 TXT 的行内容；token 由注册成功的token.txt 单独保存。"""
     return row.get("original_email_line") or row.get("email") or ""
@@ -630,6 +639,7 @@ def insert_account(
         existing = _find_by_email(accounts, email)
         outlook_row = _find_by_email(outlook_rows, email)
         extra_json = json.dumps(extra, ensure_ascii=False) if extra else None
+        registration_password = str((extra or {}).get("registration_password") or "")
 
         if existing is None:
             row_id = _next_id(accounts)
@@ -653,6 +663,7 @@ def insert_account(
             "device_id": device_id if device_id is not None else row.get("device_id"),
             "proxy_used": proxy_used if proxy_used is not None else row.get("proxy_used"),
             "email_source": email_source if email_source is not None else row.get("email_source"),
+            "registration_password": registration_password or row.get("registration_password"),
             "extra_json": extra_json if extra_json is not None else row.get("extra_json"),
             "codex_status": codex_status if codex_status is not None else row.get("codex_status"),
             "codex_error": codex_error if codex_error is not None else row.get("codex_error"),
