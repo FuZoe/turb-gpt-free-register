@@ -26,7 +26,7 @@ def make_driver(page):
     return CloakSeleniumDriver(browser=object(), context=None, page=page)
 
 
-def test_get_waits_for_commit_and_body_instead_of_domcontentloaded():
+def test_get_waits_for_domcontentloaded_in_shorter_attempts():
     page = FakePage()
     driver = make_driver(page)
 
@@ -34,12 +34,9 @@ def test_get_waits_for_commit_and_body_instead_of_domcontentloaded():
 
     assert page.goto_calls == [(
         "https://chatgpt.com/auth/login",
-        {"wait_until": "commit", "timeout": 30000},
+        {"wait_until": "domcontentloaded", "timeout": 30000},
     )]
-    assert page.wait_calls == [(
-        "body",
-        {"state": "attached", "timeout": 30000},
-    )]
+    assert page.wait_calls == []
 
 
 def test_get_retries_transient_proxy_disconnect(monkeypatch):
@@ -53,7 +50,7 @@ def test_get_retries_transient_proxy_disconnect(monkeypatch):
     driver.get("https://chatgpt.com/auth/login")
 
     assert len(page.goto_calls) == 2
-    assert len(page.wait_calls) == 1
+    assert page.wait_calls == []
 
 
 def test_get_propagates_non_transient_navigation_error():

@@ -339,16 +339,14 @@ class CloakSeleniumDriver:
             pass
 
     def get(self, url: str) -> None:
-        # 经多层代理时，页面主体已经可操作，但个别并发脚本连接可能被上游关闭。
-        # 此时 Chromium 会一直等不到 DOMContentLoaded，最终把一个可用页面误报成
-        # 90 秒导航超时。这里只等待主文档响应（commit）和 body 出现；具体业务入口
-        # 仍由后续页面流程按元素定位确认。
+        # 多层代理偶尔会在一轮导航中断开连接。把原来单次 90 秒等待拆成三次
+        # 30 秒导航，既能更快换一条新连接，也必须等到 DOMContentLoaded，避免
+        # 只看到服务端渲染的邮箱框就过早提交，导致客户端脚本尚未就绪。
         attempt_timeout = min(self._page_load_timeout_ms, 30000)
         last_error: Exception | None = None
         for attempt in range(1, 4):
             try:
-                self.page.goto(url, wait_until="commit", timeout=attempt_timeout)
-                self.page.wait_for_selector("body", state="attached", timeout=attempt_timeout)
+                self.page.goto(url, wait_until="domcontentloaded", timeout=attempt_timeout)
                 return
             except Exception as exc:
                 last_error = exc
