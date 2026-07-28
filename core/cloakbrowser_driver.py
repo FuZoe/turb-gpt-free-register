@@ -339,7 +339,37 @@ class CloakSeleniumDriver:
             pass
 
     def get(self, url: str) -> None:
-        self.page.goto(url, wait_until="domcontentloaded", timeout=self._page_load_timeout_ms)
+        # 经多层代理时，页面主体已经可操作，但个别并发脚本连接可能被上游关闭。
+        # 此时 Chromium 会一直等不到 DOMContentLoaded，最终把一个可用页面误报成
+        # 90 秒导航超时。这里只等待主文档响应（commit）和 body 出现；具体业务入口
+        # 仍由后续页面流程按元素定位确认。
+        attempt_timeout = min(self._page_load_timeout_ms, 30000)
+        last_error: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                self.page.goto(url, wait_until="commit", timeout=attempt_timeout)
+                self.page.wait_for_selector("body", state="attached", timeout=attempt_timeout)
+                return
+            except Exception as exc:
+                last_error = exc
+                error_text = f"{type(exc).__name__}: {exc}"
+                transient = any(marker in error_text for marker in (
+                    "Timeout",
+                    "ERR_CONNECTION_CLOSED",
+                    "ERR_CONNECTION_RESET",
+                    "ERR_TIMED_OUT",
+                    "ERR_PROXY_CONNECTION_FAILED",
+                ))
+                if not transient or attempt >= 3:
+                    raise
+                logger.warning(
+                    "[Cloak] 页面导航连接中断，准备重试（%s/3）：%s",
+                    attempt,
+                    error_text.splitlines()[0][:240],
+                )
+                time.sleep(float(attempt))
+        if last_error is not None:
+            raise last_error
 
     def back(self) -> None:
         self.page.go_back(wait_until="domcontentloaded", timeout=self._page_load_timeout_ms)
