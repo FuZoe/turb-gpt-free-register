@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
+import signal
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,6 +16,56 @@ from urllib.parse import urlsplit
 from config import cloakbrowser as _cfg
 
 logger = logging.getLogger(__name__)
+_PROCESS_TRACK_LOCK = threading.Lock()
+
+
+def _browser_process_snapshot() -> dict[int, tuple[int, str]]:
+    """读取本进程启动的 Cloak/Playwright 相关进程；仅 Linux 服务器启用。"""
+    if os.name != "posix" or not Path("/proc").exists():
+        return {}
+    out: dict[int, tuple[int, str]] = {}
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            pid = int(entry.name)
+            cmd = (entry / "cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", errors="ignore")
+            if ".cloakbrowser/" not in cmd and "playwright/driver" not in cmd:
+                continue
+            status = (entry / "status").read_text(encoding="utf-8", errors="ignore")
+            match = re.search(r"^PPid:\s+(\d+)", status, re.MULTILINE)
+            out[pid] = (int(match.group(1)) if match else 0, cmd)
+        except (OSError, ValueError):
+            continue
+    return out
+
+
+def _owned_process_tree(seed_pids: set[int]) -> set[int]:
+    snapshot = _browser_process_snapshot()
+    owned = set(seed_pids)
+    changed = True
+    while changed:
+        changed = False
+        for pid, (ppid, _cmd) in snapshot.items():
+            if ppid in owned and pid not in owned:
+                owned.add(pid)
+                changed = True
+    return owned
+
+
+def _terminate_owned_browser_processes(seed_pids: set[int]) -> None:
+    targets = _owned_process_tree(seed_pids)
+    if not targets:
+        return
+    force_kill_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
+    for sig, delay in ((signal.SIGTERM, 0.8), (force_kill_signal, 0.0)):
+        for pid in sorted(targets, reverse=True):
+            try:
+                os.kill(pid, sig)
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+        if delay:
+            time.sleep(delay)
 
 
 @dataclass
@@ -376,6 +429,7 @@ class CloakSeleniumDriver:
         self.page.reload(wait_until="domcontentloaded", timeout=self._page_load_timeout_ms)
 
     def quit(self) -> None:
+        owned_pids = _owned_process_tree(set(getattr(self, "_owned_process_pids", set()) or set()))
         try:
             if self.context is not None:
                 self.context.close()
@@ -385,6 +439,7 @@ class CloakSeleniumDriver:
             self.browser.close()
         except Exception:
             pass
+        _terminate_owned_browser_processes(owned_pids)
 
     def find_elements(self, by: Any, selector: str) -> list[CloakElement]:
         loc = self._locator(by, selector)
@@ -644,17 +699,27 @@ def build_cloak_driver(proxy: str | None = None) -> tuple[CloakSeleniumDriver, C
     if locale_opts.get("accept_language"):
         context_kwargs["extra_http_headers"] = {"Accept-Language": locale_opts["accept_language"]}
 
-    if user_data_dir:
-        context = launch_persistent_context(user_data_dir, **opts)
-        page = context.new_page()
-        browser = getattr(context, "browser", None) or context
-        # persistent context 的 locale/timezone 已通过 launch_persistent_context 参数传入。
-    else:
-        browser = launch(**opts)
-        context = browser.new_context(**context_kwargs)
-        page = context.new_page()
+    # /proc 差集用来识别本次 launch 创建的进程。只串行化很短的启动阶段，
+    # 防止三个并发注册互相把对方的 Chromium 记成自己拥有；页面注册仍然并行。
+    with _PROCESS_TRACK_LOCK:
+        process_baseline = set(_browser_process_snapshot())
+        try:
+            if user_data_dir:
+                context = launch_persistent_context(user_data_dir, **opts)
+                page = context.new_page()
+                browser = getattr(context, "browser", None) or context
+                # persistent context 的 locale/timezone 已通过 launch_persistent_context 参数传入。
+            else:
+                browser = launch(**opts)
+                context = browser.new_context(**context_kwargs)
+                page = context.new_page()
+        except Exception:
+            _terminate_owned_browser_processes(set(_browser_process_snapshot()) - process_baseline)
+            raise
+        owned_process_pids = set(_browser_process_snapshot()) - process_baseline
 
     driver = CloakSeleniumDriver(browser=browser, context=context, page=page)
+    driver._owned_process_pids = owned_process_pids
     # Roxy/Cloak 共用部分页面操作函数；给共享函数一个显式日志前缀，
     # 避免 Cloak 注册流程里出现 `[Roxy注册]`。
     driver._registration_log_prefix = "[Cloak注册]"

@@ -533,6 +533,15 @@ def _find_by_email(rows: list[dict], email: str) -> dict | None:
     return next((r for r in rows if (r.get("email") or "").lower() == target), None)
 
 
+def _mailbox_claim_sort_key(row: dict) -> tuple[int, str, int]:
+    """优先从未尝试邮箱；失败回收的邮箱进入队尾，避免同一批反复领取同一地址。"""
+    return (
+        int(row.get("attempt_count") or 0),
+        str(row.get("released_at") or ""),
+        int(row.get("id") or 0),
+    )
+
+
 def _decorate_account(row: dict) -> dict:
     out = dict(row)
     out["note"] = out.get("note") or ""
@@ -1533,12 +1542,13 @@ def import_registered_email_accounts(records: list[dict], source: str | None) ->
 def claim_next_outlook() -> dict | None:
     """原子领取一个可用 Outlook 账号并标记为 used。"""
     with _LOCK:
-        rows = sorted(_load_outlook(), key=lambda x: int(x.get("id") or 0))
+        rows = sorted(_load_outlook(), key=_mailbox_claim_sort_key)
         row = next((r for r in rows if r.get("status") == "available"), None)
         if row is None:
             return None
         row["status"] = "used"
         row["used_at"] = _now()
+        row["attempt_count"] = int(row.get("attempt_count") or 0) + 1
         row["note"] = None
         _save_outlook(rows)
         return _decorate_outlook(row)
@@ -1553,7 +1563,7 @@ def release_outlook(email: str, status: str = "available", note: str | None = No
             return
         row["status"] = status
         if status == "available":
-            row["used_at"] = None
+            row["released_at"] = _now()
         elif status in ("used", "failed", "disabled"):
             row["used_at"] = row.get("used_at") or _now()
         if note is not None:
@@ -1571,7 +1581,7 @@ def release_unconsumed_outlook(email: str, note: str | None = None) -> bool:
         if row is None or row.get("status") != "used":
             return False
         row["status"] = "available"
-        row["used_at"] = None
+        row["released_at"] = _now()
         if note is not None:
             row["note"] = note
         _save_outlook(rows)
@@ -1660,12 +1670,13 @@ def import_generic_api_emails(records: list[dict]) -> tuple[int, int]:
 def claim_next_generic_api_email() -> dict | None:
     """原子领取一个可用通用 API 邮箱并标记为 used。"""
     with _LOCK:
-        rows = sorted(_load_generic_api_emails(), key=lambda x: int(x.get("id") or 0))
+        rows = sorted(_load_generic_api_emails(), key=_mailbox_claim_sort_key)
         row = next((r for r in rows if r.get("status") == "available"), None)
         if row is None:
             return None
         row["status"] = "used"
         row["used_at"] = _now()
+        row["attempt_count"] = int(row.get("attempt_count") or 0) + 1
         row["note"] = None
         _save_generic_api_emails(rows)
         return _decorate_generic_api_email(row)
@@ -1680,7 +1691,7 @@ def release_generic_api_email(email: str, status: str = "available", note: str |
             return
         row["status"] = status
         if status == "available":
-            row["used_at"] = None
+            row["released_at"] = _now()
         elif status in ("used", "failed", "disabled"):
             row["used_at"] = row.get("used_at") or _now()
         if note is not None:
@@ -1698,7 +1709,7 @@ def release_unconsumed_generic_api_email(email: str, note: str | None = None) ->
         if row is None or row.get("status") != "used":
             return False
         row["status"] = "available"
-        row["used_at"] = None
+        row["released_at"] = _now()
         if note is not None:
             row["note"] = note
         _save_generic_api_emails(rows)
