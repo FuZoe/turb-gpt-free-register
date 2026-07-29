@@ -140,16 +140,13 @@
     .col-error { width: 320px; }
     .col-actions { width: 220px; }
     .jobs-table .col-actions { width: 330px; }
-    .accounts-table .col-token { width: 92px; }
-    .accounts-table .col-plan { width: 340px; }
-    .accounts-table .col-note { width: 180px; }
-    .accounts-table .col-agent { width: 220px; }
-    .accounts-table .col-actions { width: 360px; }
-    .accounts-table td:nth-child(6), .accounts-table th:nth-child(6) { overflow: visible; text-overflow: clip; }
-    .accounts-table td:nth-child(10), .accounts-table th:nth-child(10) { overflow: visible; text-overflow: clip; }
-
+    .accounts-table .col-plan { width: 260px; }
+    .accounts-table .col-note { width: 110px; }
+    .accounts-table .col-actions { width: 570px; }
+    .accounts-table td:nth-child(4), .accounts-table th:nth-child(4),
+    .accounts-table td:nth-child(6), .accounts-table th:nth-child(6),
+    .accounts-table td:nth-child(7), .accounts-table th:nth-child(7),
     .accounts-table td:nth-child(8), .accounts-table th:nth-child(8) { overflow: visible; text-overflow: clip; }
-    .accounts-table td:nth-child(11), .accounts-table th:nth-child(11) { overflow: visible; text-overflow: clip; }
     .outlook-table .col-actions { width: 220px; }
     .codex-table .col-actions { width: 260px; }
     th { position: sticky; top: 0; background: #fbfcfe; color: #475467; z-index: 1; font-size: 12px; }
@@ -233,15 +230,11 @@
     .accounts-table .col-check { width: 34px; }
     .accounts-table .col-id { width: 52px; }
     .accounts-table .col-email { width: 250px; }
-    .accounts-table .col-source { width: 80px; }
-    .accounts-table .col-token { width: 92px; }
-    .accounts-table .col-plan { width: 300px; }
-    .accounts-table .col-note { width: 150px; }
+    .accounts-table .col-plan { width: 260px; }
+    .accounts-table .col-note { width: 110px; }
     .accounts-table .col-small { width: 130px; }
     .accounts-table .col-status { width: 88px; }
-    .accounts-table .col-agent { width: 220px; }
-    .accounts-table .col-time { width: 170px; }
-    .accounts-table .col-actions { width: 330px; }
+    .accounts-table .col-actions { width: 570px; }
     .accounts-table .main-cell { font-size: 12px; }
     .accounts-table .sub-cell { margin-top: 1px; font-size: 11px; }
     .accounts-table .mono { font-size: 11px; }
@@ -279,8 +272,8 @@
       width: 100%; max-width: 100%; min-width: 0;
       max-height: 320px; overflow: auto; line-height: 1.5;
     }
-    #logPanel, #retryLogPanel, #qrPanel, #secretPanel { min-width: 0; max-width: 100%; overflow-x: hidden; }
-    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #qrPanel:not(.hidden), #secretPanel:not(.hidden) {
+    #logPanel, #retryLogPanel, #qrPanel, #secretPanel, #agentTokenPanel { min-width: 0; max-width: 100%; overflow-x: hidden; }
+    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #qrPanel:not(.hidden), #secretPanel:not(.hidden), #agentTokenPanel:not(.hidden) {
       position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
       z-index: 1000; display: block; width: min(1100px, calc(100vw - 48px));
       max-height: min(760px, calc(100vh - 48px)); overflow: hidden;
@@ -289,8 +282,9 @@
     }
     #qrPanel:not(.hidden) { width: min(520px, calc(100vw - 48px)); text-align: center; }
     #secretPanel:not(.hidden) { width: min(560px, calc(100vw - 48px)); }
-    #logPanel h3, #retryLogPanel h3, #qrPanel h3, #secretPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
-    #logPanel h3 .btn, #retryLogPanel h3 .btn, #qrPanel h3 .btn, #secretPanel h3 .btn { margin-left:auto; float:none !important; }
+    #agentTokenPanel:not(.hidden) { width: min(760px, calc(100vw - 48px)); }
+    #logPanel h3, #retryLogPanel h3, #qrPanel h3, #secretPanel h3, #agentTokenPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+    #logPanel h3 .btn, #retryLogPanel h3 .btn, #qrPanel h3 .btn, #secretPanel h3 .btn, #agentTokenPanel h3 .btn { margin-left:auto; float:none !important; }
     #logPanel .log, #retryLogPanel .log { max-height: calc(min(760px, calc(100vh - 48px)) - 74px); margin-top:0; }
     #qrPanel img { display:block; max-width:min(360px, calc(100vw - 96px)); max-height:420px; margin:12px auto; border:1px solid var(--line); border-radius:10px; background:#fff; }
     #qrPanel .qr-link { display:block; word-break:break-all; white-space:normal; font-size:12px; color:var(--muted); margin-top:8px; }
@@ -299,6 +293,7 @@
     .secret-value-row { display:flex; gap:8px; align-items:flex-end; }
     .secret-value-row label { flex:1; margin:0; }
     .secret-value-row input { font-family:ui-monospace,Consolas,monospace; }
+    #agentTokenValue { min-height:180px; max-height:360px; font-family:ui-monospace,Consolas,monospace; }
     .hidden { display: none !important; }
     #toast {
       position: fixed; right: 18px; bottom: 18px; padding: 10px 14px; border-radius: 8px;
@@ -521,7 +516,7 @@
             <span class="btn-group-title">批量</span>
             <button class="btn good" id="btnNoteSelectedAccounts" disabled title="给选中的账号统一设置备注，留空可清空备注">备注</button>
             <button class="btn good" id="btnCopySelectedLines" disabled title="复制选中账号的完整整行，每个账号一行">复制行</button>
-            <button class="btn good" id="btnDownloadSelectedTxt" disabled title="把选中账号的完整整行保存为 TXT 文件，每个账号一行">下载TXT</button>
+            <button class="btn good" id="btnDownloadSelectedTxt" disabled title="按 账号----密码----2FA 格式下载选中账号，每个账号一行">下载TXT</button>
             <button class="btn" id="btnArchiveSelectedAccounts" disabled title="归档选中的账号；默认账号列表将不再查询/显示这些账号">归档</button>
             <button class="btn" id="btnDeleteSelectedAccounts" disabled title="删除选中的本地账号/token记录">删除</button>
           </div>
@@ -534,10 +529,10 @@
       </div>
       <div class="table-wrap">
         <table class="accounts-table">
-          <colgroup><col class="col-check"><col class="col-id"><col class="col-email"><col class="col-source"><col class="col-token"><col class="col-plan"><col class="col-note"><col class="col-small"><col class="col-status"><col class="col-agent"><col class="col-time"><col class="col-actions"></colgroup>
+          <colgroup><col class="col-check"><col class="col-id"><col class="col-email"><col class="col-plan"><col class="col-note"><col class="col-small"><col class="col-status"><col class="col-actions"></colgroup>
           <thead><tr>
             <th><input type="checkbox" id="accountsSelectAll" title="全选/取消全选当前页账号"></th>
-            <th>ID</th><th>邮箱</th><th>来源</th><th>Token</th><th>套餐</th><th>备注</th><th>密码/2FA</th><th>Codex</th><th>Agent Token</th><th>创建时间</th><th>操作</th>
+            <th>ID</th><th>邮箱</th><th>套餐</th><th>备注</th><th>密码/2FA</th><th>Codex</th><th>操作</th>
           </tr></thead>
           <tbody id="accountsBody"></tbody>
         </table>
@@ -690,6 +685,14 @@
     </label>
     <button class="btn good" id="btnCopyAccountPassword">复制密码</button>
   </div>
+</div>
+<div id="agentTokenPanel" class="body hidden">
+  <h3>Codex Agent Token <button class="btn" onclick="closeAgentTokenModal()">关闭</button></h3>
+  <div class="sub-cell" id="agentTokenEmail" style="margin-bottom:10px;"></div>
+  <label class="fld">Agent Token
+    <textarea id="agentTokenValue" readonly autocomplete="off"></textarea>
+  </label>
+  <button class="btn good" id="btnCopyAgentTokenValue">复制Agent Token</button>
 </div>
 
 <script>
@@ -969,7 +972,7 @@ async function refreshJobs() {
 
 let modalScrollY = 0;
 function updateModalScrollLock() {
-  const opened = !$('#logPanel').classList.contains('hidden') || !$('#retryLogPanel').classList.contains('hidden') || !$('#qrPanel').classList.contains('hidden') || !$('#secretPanel').classList.contains('hidden');
+  const opened = !$('#logPanel').classList.contains('hidden') || !$('#retryLogPanel').classList.contains('hidden') || !$('#qrPanel').classList.contains('hidden') || !$('#secretPanel').classList.contains('hidden') || !$('#agentTokenPanel').classList.contains('hidden');
   const locked = document.body.classList.contains('modal-open');
   if (opened && !locked) {
     modalScrollY = window.scrollY || document.documentElement.scrollTop || 0;
@@ -1021,6 +1024,20 @@ async function openAccountPassword(id, email) {
   updateModalScrollLock();
 }
 $('#btnCopyAccountPassword').addEventListener('click', () => copyText($('#secretAccountPassword').value));
+function closeAgentTokenModal() {
+  $('#agentTokenPanel').classList.add('hidden');
+  $('#agentTokenValue').value = '';
+  updateModalScrollLock();
+}
+async function openAgentToken(id, email) {
+  const value = await fetchOneAccountSecret(id, 'codex_agent_token');
+  if (!value) { showToast('该账号没有保存 Agent Token'); return; }
+  $('#agentTokenEmail').textContent = email || `账号 #${id}`;
+  $('#agentTokenValue').value = value;
+  $('#agentTokenPanel').classList.remove('hidden');
+  updateModalScrollLock();
+}
+$('#btnCopyAgentTokenValue').addEventListener('click', () => copyText($('#agentTokenValue').value));
 
 $('#jobsBody').addEventListener('pointerdown', (e) => {
   const retryBtn = e.target.closest('[data-retry-job]');
@@ -1300,11 +1317,12 @@ function _codexAgentCell(r) {
   if (s === 'running') return `<div class="agent-token-cell"><span class="pill status-running" title="${title}">生成中</span></div>`;
   if (s === 'success') {
     const rid = r.codex_agent_runtime_id ? short(r.codex_agent_runtime_id, 10) : '已生成';
+    const view = r.codex_agent_has_token ? `<button data-account-show-agent-token="${esc(r.id)}" data-account-email="${esc(r.email)}" title="查看完整 Agent Token">查看Agent</button>` : '';
     const copy = r.codex_agent_has_token ? `<button data-account-copy-secret="codex_agent_token" data-account-id="${esc(r.id)}" title="按需读取并复制完整 Agent Token">复制Agent Token</button>` : '';
     const download = `<button class="agent-download" data-codex-agent-download="${esc(r.id)}" title="下载该账号 Codex Agent auth.json">下载Agent</button>`;
     const uploadSub2 = `<button class="agent-download" data-codex-agent-upload-sub2="${esc(r.id)}" title="上传该账号 Agent Token 到 sub2api">上传sub2</button>`;
     const regen = `<button data-codex-agent="${esc(r.id)}" title="重新生成 Codex Agent Token">重生成</button>`;
-    return `<div class="agent-token-cell"><span class="pill status-success" title="${title}">${esc(rid)}</span>${copy}${download}${uploadSub2}${regen}</div>`;
+    return `<div class="agent-token-cell"><span class="pill status-success" title="${title}">${esc(rid)}</span>${view}${copy}${download}${uploadSub2}${regen}</div>`;
   }
   const gen = r.has_access_token ? `<button data-codex-agent="${esc(r.id)}" title="生成 Codex CLI agent_identity auth.json/token">生成Agent</button>` : '';
   if (s === 'failed') return `<div class="agent-token-cell"><span class="pill status-failed" title="${title}">失败</span>${gen}</div>`;
@@ -1468,23 +1486,20 @@ function renderAccounts() {
       <td><input type="checkbox" class="account-row-check" data-account-id="${esc(r.id)}" ${ACCOUNT_SELECTED.has(Number(r.id)) ? 'checked' : ''}></td>
       <td class="muted">#${esc(r.id)}</td>
       <td><div class="main-cell">${esc(r.email)}${r.archived ? ' <span class="pill status-used" title="该账号已归档">归档</span>' : ''}</div><div class="sub-cell">${esc(r.user_name || '-')}</div></td>
-      <td>${esc(r.email_source || '-')}</td>
-      <td><span class="mono" title="列表仅显示预览，完整 Token 请点复制">${r.has_access_token ? '有Token' : '<span class="muted">无Token</span>'}</span></td>
       <td>${_planCell(r)}<div class="sub-cell">${_extractLinkCell(r)}</div></td>
-      <td class="wrap" title="${esc(r.note || '')}">${r.note ? esc(short(r.note, 80)) : '<span class="muted">-</span>'}</td>
+      <td class="wrap" title="${esc(r.note || '')}">${r.note ? esc(short(r.note, 40)) : '<span class="muted">-</span>'}</td>
       <td><div class="account-secret-cell">${r.has_registration_password ? `<button data-account-show-password="${esc(r.id)}" data-account-email="${esc(r.email)}">查看密码</button>` : '<span class="muted">无密码</span>'}<span>${r.totp_enabled ? '2FA已启用' : '<span class="muted">2FA未启用</span>'}</span></div></td>
       <td>${_codexCell(r)}</td>
-      <td>${_codexAgentCell(r)}</td>
-      <td class="muted">${esc(r.created_at || '-')}</td>
       <td class="actions actions-cell">
         <div class="account-row-actions">
-          <div class="account-action-group"><button class="primary" data-account-copy-secret="access_token" data-account-id="${esc(r.id)}" ${r.has_access_token ? '' : 'disabled'}>复制Token</button> <button class="good" data-account-copy-secret="copy_line" data-account-id="${esc(r.id)}">复制整行</button>${r.has_registration_password ? ` <button class="good" data-account-copy-secret="credentials_line" data-account-id="${esc(r.id)}" title="复制 邮箱----ChatGPT密码----TOTP">复制密码2FA</button>` : ''}</div>
+          <div class="account-action-group"><button class="primary" data-account-copy-secret="access_token" data-account-id="${esc(r.id)}" ${r.has_access_token ? '' : 'disabled'}>复制AT</button> <button class="good" data-account-copy-secret="copy_line" data-account-id="${esc(r.id)}">复制整行</button>${r.has_registration_password ? ` <button class="good" data-account-copy-secret="credentials_line" data-account-id="${esc(r.id)}" title="复制 邮箱----ChatGPT密码----TOTP">复制密码2FA</button>` : ''}</div>
+          <div class="account-action-group">${_codexAgentCell(r)}</div>
           <div class="account-action-group"><button data-account-note="${esc(r.id)}" title="设置/清空该账号备注">备注</button> ${_planAction(r)} ${_extractLinkAction(r)}</div>
           <div class="account-action-group">${_codexAction(r)} <button data-codex-log="${esc(r.email)}" title="查看该账号最近一次 Codex 补跑日志">补跑日志</button></div>
           <div class="account-action-group danger-zone"><button data-account-archive="${esc(r.id)}" data-archived="${r.archived ? '0' : '1'}" title="${r.archived ? '恢复到默认账号列表' : '归档后默认账号列表不再显示'}">${r.archived ? '恢复' : '归档'}</button> <button class="danger" data-account-delete="${esc(r.id)}" data-email="${esc(r.email)}">删除</button></div>
         </div>
       </td>
-    </tr>`).join('') || '<tr><td colspan="12" class="muted">暂无账号</td></tr>';
+    </tr>`).join('') || '<tr><td colspan="8" class="muted">暂无账号</td></tr>';
   updateAccountSelectionUi(rows);
   _renderPager('accounts', total);
 }
@@ -1566,6 +1581,14 @@ $('#btnCloseRetryLog').addEventListener('click', closeRetryLogModal);
 
 // 账号操作按钮（事件委托）
 $('#accountsBody').addEventListener('click', async (e) => {
+  const showAgentTokenBtn = e.target.closest('[data-account-show-agent-token]');
+  if (showAgentTokenBtn) {
+    showAgentTokenBtn.disabled = true;
+    try { await openAgentToken(Number(showAgentTokenBtn.dataset.accountShowAgentToken), showAgentTokenBtn.dataset.accountEmail); }
+    catch(err) { showToast('读取 Agent Token 失败: ' + err.message); }
+    finally { showAgentTokenBtn.disabled = false; }
+    return;
+  }
   const showPasswordBtn = e.target.closest('[data-account-show-password]');
   if (showPasswordBtn) {
     showPasswordBtn.disabled = true;
@@ -1802,12 +1825,12 @@ async function downloadSelectedAccountTxt() {
   if (!ids.length) { showToast('请先选择账号'); return; }
   let lines = [];
   try {
-    lines = await fetchAccountSecrets(ids, 'copy_line');
+    lines = await fetchAccountSecrets(ids, 'credentials_line');
   } catch(err) { showToast('生成 TXT 失败: ' + err.message); return; }
-  if (!lines.length) { showToast('选中账号没有可下载整行'); return; }
+  if (!lines.length) { showToast('选中账号没有可下载的账号密码2FA'); return; }
   const now = new Date();
   const pad = n => String(n).padStart(2, '0');
-  const filename = `accounts-selected-${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.txt`;
+  const filename = `accounts-password-2fa-${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.txt`;
   const blob = new Blob(['\ufeff' + lines.join('\n') + '\n'], {type: 'text/plain;charset=utf-8'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
