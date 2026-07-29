@@ -116,6 +116,7 @@ cp .env.example .env
 
 - `WEBUI_AUTH_CODE`（WebUI 登录授权码）
 - `WEBUI_TENANT_AUTH_CODES`（可选，JSON 格式的租户名到授权码映射；租户数据相互隔离）
+- `REGISTRATION_WORKERS_LIMIT`（注册浏览器并发硬上限；小内存服务器建议设为 `1`）
 - `WEBUI_SESSION_SECRET`（可选，Session Cookie 签名密钥）
 - `BROWSER_USE_API_KEY`
 - `SKYVERN_API_KEY`

@@ -82,3 +82,10 @@ def test_registration_worker_keeps_submitting_tenant(monkeypatch):
         registration_svc.submit_registration(count=1, email_source="generic_api", workers=1)
 
     assert seen == ["team-a"]
+
+
+def test_registration_worker_limit_caps_requested_concurrency(monkeypatch):
+    monkeypatch.setenv("REGISTRATION_WORKERS_LIMIT", "1")
+
+    assert registration_svc._normalize_workers(16) == 1
+    assert registration_svc._normalize_workers(None) == 1

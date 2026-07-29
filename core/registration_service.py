@@ -10,6 +10,7 @@
     → 创建 5 个任务，丢入线程池，立即返回 [job_dict, ...]
 """
 import logging
+import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -233,13 +234,18 @@ def recover_interrupted_jobs() -> int:
 
 
 def _normalize_workers(max_workers: int | None) -> int:
+    try:
+        configured_limit = int(os.getenv("REGISTRATION_WORKERS_LIMIT", str(_MAX_MAX_WORKERS)) or _MAX_MAX_WORKERS)
+    except (TypeError, ValueError):
+        configured_limit = _MAX_MAX_WORKERS
+    configured_limit = max(_MIN_MAX_WORKERS, min(_MAX_MAX_WORKERS, configured_limit))
     if max_workers is None:
-        return _DEFAULT_MAX_WORKERS
+        return min(_DEFAULT_MAX_WORKERS, configured_limit)
     try:
         value = int(max_workers)
     except (TypeError, ValueError):
         value = _DEFAULT_MAX_WORKERS
-    return max(_MIN_MAX_WORKERS, min(_MAX_MAX_WORKERS, value))
+    return max(_MIN_MAX_WORKERS, min(configured_limit, value))
 
 
 def get_executor(max_workers: int | None = None) -> ThreadPoolExecutor:
