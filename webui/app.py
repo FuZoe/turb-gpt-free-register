@@ -138,9 +138,11 @@ def _account_secret_value(row: dict, field: str) -> str:
     if field == "credentials_line":
         from core.db import _account_credentials_line
         return _account_credentials_line(row)
+    if field == "registration_password":
+        return str(row.get("registration_password") or "")
     if field == "codex_agent_token":
         return str(row.get("codex_agent_token") or "")
-    raise ValueError("field 仅支持 access_token/copy_line/credentials_line/codex_agent_token")
+    raise ValueError("field 仅支持 access_token/copy_line/credentials_line/registration_password/codex_agent_token")
 
 
 def _compact_job_for_list(row: dict) -> dict:

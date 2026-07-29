@@ -259,3 +259,4 @@ def test_credentials_line_contains_chatgpt_password_and_totp():
     expected = "user@example.test----StrongPass!234----TOTPSECRET"
     assert _account_credentials_line(row) == expected
     assert _account_secret_value(row, "credentials_line") == expected
+    assert _account_secret_value(row, "registration_password") == "StrongPass!234"

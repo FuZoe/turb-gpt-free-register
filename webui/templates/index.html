@@ -237,7 +237,7 @@
     .accounts-table .col-token { width: 92px; }
     .accounts-table .col-plan { width: 300px; }
     .accounts-table .col-note { width: 150px; }
-    .accounts-table .col-small { width: 76px; }
+    .accounts-table .col-small { width: 130px; }
     .accounts-table .col-status { width: 88px; }
     .accounts-table .col-agent { width: 220px; }
     .accounts-table .col-time { width: 170px; }
@@ -279,8 +279,8 @@
       width: 100%; max-width: 100%; min-width: 0;
       max-height: 320px; overflow: auto; line-height: 1.5;
     }
-    #logPanel, #retryLogPanel, #qrPanel { min-width: 0; max-width: 100%; overflow-x: hidden; }
-    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #qrPanel:not(.hidden) {
+    #logPanel, #retryLogPanel, #qrPanel, #secretPanel { min-width: 0; max-width: 100%; overflow-x: hidden; }
+    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #qrPanel:not(.hidden), #secretPanel:not(.hidden) {
       position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
       z-index: 1000; display: block; width: min(1100px, calc(100vw - 48px));
       max-height: min(760px, calc(100vh - 48px)); overflow: hidden;
@@ -288,11 +288,17 @@
       background: var(--surface); box-shadow: 0 0 0 9999px rgba(15,23,42,.45), 0 24px 70px rgba(15,23,42,.34);
     }
     #qrPanel:not(.hidden) { width: min(520px, calc(100vw - 48px)); text-align: center; }
-    #logPanel h3, #retryLogPanel h3, #qrPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
-    #logPanel h3 .btn, #retryLogPanel h3 .btn, #qrPanel h3 .btn { margin-left:auto; float:none !important; }
+    #secretPanel:not(.hidden) { width: min(560px, calc(100vw - 48px)); }
+    #logPanel h3, #retryLogPanel h3, #qrPanel h3, #secretPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+    #logPanel h3 .btn, #retryLogPanel h3 .btn, #qrPanel h3 .btn, #secretPanel h3 .btn { margin-left:auto; float:none !important; }
     #logPanel .log, #retryLogPanel .log { max-height: calc(min(760px, calc(100vh - 48px)) - 74px); margin-top:0; }
     #qrPanel img { display:block; max-width:min(360px, calc(100vw - 96px)); max-height:420px; margin:12px auto; border:1px solid var(--line); border-radius:10px; background:#fff; }
     #qrPanel .qr-link { display:block; word-break:break-all; white-space:normal; font-size:12px; color:var(--muted); margin-top:8px; }
+    .account-secret-cell { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+    .account-secret-cell button { min-height:26px; padding:0 9px; border:1px solid #b9dfc9; border-radius:999px; background:#f0fbf5; color:#166534; font-size:11px; font-weight:800; cursor:pointer; }
+    .secret-value-row { display:flex; gap:8px; align-items:flex-end; }
+    .secret-value-row label { flex:1; margin:0; }
+    .secret-value-row input { font-family:ui-monospace,Consolas,monospace; }
     .hidden { display: none !important; }
     #toast {
       position: fixed; right: 18px; bottom: 18px; padding: 10px 14px; border-radius: 8px;
@@ -531,7 +537,7 @@
           <colgroup><col class="col-check"><col class="col-id"><col class="col-email"><col class="col-source"><col class="col-token"><col class="col-plan"><col class="col-note"><col class="col-small"><col class="col-status"><col class="col-agent"><col class="col-time"><col class="col-actions"></colgroup>
           <thead><tr>
             <th><input type="checkbox" id="accountsSelectAll" title="全选/取消全选当前页账号"></th>
-            <th>ID</th><th>邮箱</th><th>来源</th><th>Token</th><th>套餐</th><th>备注</th><th>2FA</th><th>Codex</th><th>Agent Token</th><th>创建时间</th><th>操作</th>
+            <th>ID</th><th>邮箱</th><th>来源</th><th>Token</th><th>套餐</th><th>备注</th><th>密码/2FA</th><th>Codex</th><th>Agent Token</th><th>创建时间</th><th>操作</th>
           </tr></thead>
           <tbody id="accountsBody"></tbody>
         </table>
@@ -674,6 +680,16 @@
   <h3>支付二维码 <button class="btn" onclick="closeQrModal()">关闭</button></h3>
   <img id="qrImage" alt="支付二维码">
   <a id="qrOpenLink" class="qr-link" href="#" target="_blank" rel="noopener noreferrer"></a>
+</div>
+<div id="secretPanel" class="body hidden">
+  <h3>ChatGPT 登录密码 <button class="btn" onclick="closeSecretModal()">关闭</button></h3>
+  <div class="sub-cell" id="secretAccountEmail" style="margin-bottom:10px;"></div>
+  <div class="secret-value-row">
+    <label class="fld">密码
+      <input id="secretAccountPassword" type="text" readonly autocomplete="off">
+    </label>
+    <button class="btn good" id="btnCopyAccountPassword">复制密码</button>
+  </div>
 </div>
 
 <script>
@@ -953,7 +969,7 @@ async function refreshJobs() {
 
 let modalScrollY = 0;
 function updateModalScrollLock() {
-  const opened = !$('#logPanel').classList.contains('hidden') || !$('#retryLogPanel').classList.contains('hidden') || !$('#qrPanel').classList.contains('hidden');
+  const opened = !$('#logPanel').classList.contains('hidden') || !$('#retryLogPanel').classList.contains('hidden') || !$('#qrPanel').classList.contains('hidden') || !$('#secretPanel').classList.contains('hidden');
   const locked = document.body.classList.contains('modal-open');
   if (opened && !locked) {
     modalScrollY = window.scrollY || document.documentElement.scrollTop || 0;
@@ -991,6 +1007,20 @@ function closeQrModal() {
   $('#qrImage').removeAttribute('src');
   updateModalScrollLock();
 }
+function closeSecretModal() {
+  $('#secretPanel').classList.add('hidden');
+  $('#secretAccountPassword').value = '';
+  updateModalScrollLock();
+}
+async function openAccountPassword(id, email) {
+  const value = await fetchOneAccountSecret(id, 'registration_password');
+  if (!value) { showToast('该账号没有保存登录密码'); return; }
+  $('#secretAccountEmail').textContent = email || `账号 #${id}`;
+  $('#secretAccountPassword').value = value;
+  $('#secretPanel').classList.remove('hidden');
+  updateModalScrollLock();
+}
+$('#btnCopyAccountPassword').addEventListener('click', () => copyText($('#secretAccountPassword').value));
 
 $('#jobsBody').addEventListener('pointerdown', (e) => {
   const retryBtn = e.target.closest('[data-retry-job]');
@@ -1442,7 +1472,7 @@ function renderAccounts() {
       <td><span class="mono" title="列表仅显示预览，完整 Token 请点复制">${r.has_access_token ? '有Token' : '<span class="muted">无Token</span>'}</span></td>
       <td>${_planCell(r)}<div class="sub-cell">${_extractLinkCell(r)}</div></td>
       <td class="wrap" title="${esc(r.note || '')}">${r.note ? esc(short(r.note, 80)) : '<span class="muted">-</span>'}</td>
-      <td>${r.totp_enabled ? '已启用' : '<span class="muted">未启用</span>'}</td>
+      <td><div class="account-secret-cell">${r.has_registration_password ? `<button data-account-show-password="${esc(r.id)}" data-account-email="${esc(r.email)}">查看密码</button>` : '<span class="muted">无密码</span>'}<span>${r.totp_enabled ? '2FA已启用' : '<span class="muted">2FA未启用</span>'}</span></div></td>
       <td>${_codexCell(r)}</td>
       <td>${_codexAgentCell(r)}</td>
       <td class="muted">${esc(r.created_at || '-')}</td>
@@ -1536,6 +1566,14 @@ $('#btnCloseRetryLog').addEventListener('click', closeRetryLogModal);
 
 // 账号操作按钮（事件委托）
 $('#accountsBody').addEventListener('click', async (e) => {
+  const showPasswordBtn = e.target.closest('[data-account-show-password]');
+  if (showPasswordBtn) {
+    showPasswordBtn.disabled = true;
+    try { await openAccountPassword(Number(showPasswordBtn.dataset.accountShowPassword), showPasswordBtn.dataset.accountEmail); }
+    catch(err) { showToast('读取密码失败: ' + err.message); }
+    finally { showPasswordBtn.disabled = false; }
+    return;
+  }
   const copySecretBtn = e.target.closest('[data-account-copy-secret]');
   if (copySecretBtn) {
     const id = Number(copySecretBtn.dataset.accountId);
