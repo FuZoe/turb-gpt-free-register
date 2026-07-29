@@ -405,6 +405,19 @@ def _is_email_login_page_still_present(driver) -> bool:
     return bool(state.get("inputs"))
 
 
+def _email_submit_terminal_state(driver) -> str | None:
+    """返回邮箱提交后的稳定下一步；页面仍在过渡中时返回 None。"""
+    if _has_access_token(driver):
+        return "logged_in"
+    if _is_login_password_page(driver):
+        return "login_password"
+    if _is_email_verification_page(driver):
+        return "otp"
+    if _is_signup_password_page(driver):
+        return "password"
+    return None
+
+
 def _wait_email_submit_next_state(driver, email: str, timeout: int = 18) -> str:
     """邮箱提交后等待进入 password / otp / logged_in；仍停留邮箱页则返回 email_page。
 
@@ -421,14 +434,9 @@ def _wait_email_submit_next_state(driver, email: str, timeout: int = 18) -> str:
     cleared_last_log_at = 0.0
     expected_email = str(email or "").strip().lower()
     while time.time() < end:
-        if _has_access_token(driver):
-            return "logged_in"
-        if _is_login_password_page(driver):
-            return "login_password"
-        if _is_email_verification_page(driver):
-            return "otp"
-        if _is_signup_password_page(driver):
-            return "password"
+        terminal_state = _email_submit_terminal_state(driver)
+        if terminal_state:
+            return terminal_state
         state = _email_input_value_state(driver)
         last = state
         inputs = state.get("inputs") or []
@@ -455,6 +463,11 @@ def _wait_email_submit_next_state(driver, email: str, timeout: int = 18) -> str:
                 cleared_seen_at = None
             # 仍是当前邮箱页，继续短等。
         time.sleep(0.8)
+    # 导航可能恰好在最后一次 sleep 期间完成；超时退出循环后必须再读一次 URL/DOM，
+    # 避免已经进入 email-verification 却按 unknown 回到邮箱重填。
+    terminal_state = _email_submit_terminal_state(driver)
+    if terminal_state:
+        return terminal_state
     logger.info("%s 邮箱提交后等待下一步超时，最后邮箱页状态=%s", _log_prefix(driver), last)
     return "email_page" if _is_email_login_page_still_present(driver) else "unknown"
 
@@ -463,6 +476,13 @@ def _submit_email_and_wait_next(driver, email: str, attempts: int = 3) -> str:
     """填写并提交邮箱，必须确认进入 password/otp/logged_in 才返回。"""
     last_state = None
     for attempt in range(1, attempts + 1):
+        # 上一轮超时后页面可能刚完成导航，先识别现状再尝试重填邮箱。
+        terminal_state = _email_submit_terminal_state(driver)
+        if terminal_state:
+            if terminal_state == "login_password":
+                raise RuntimeError(f"邮箱提交后进入登录密码页，按已注册/不可用邮箱处理并停用: url={getattr(driver, 'current_url', '') or 'https://auth.openai.com/log-in/password'}")
+            logger.info("%s 重试前检测到页面已进入下一步：%s", _log_prefix(driver), terminal_state)
+            return terminal_state
         _type_email_address(driver, email, timeout=20)
         state = _email_input_value_state(driver)
         last_state = state
