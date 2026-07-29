@@ -1,6 +1,12 @@
 from core import registration_service as svc
 
 
+def test_account_creation_failed_disables_poisoned_email():
+    error = 'status=400: {"code":"account_creation_failed"}'
+
+    assert svc._should_disable_failed_registration_email(error) is True
+
+
 def test_recover_interrupted_jobs_marks_all_active_rows_stopped(monkeypatch):
     jobs = [
         {"id": 21, "status": "running", "email": "run@example.com"},
