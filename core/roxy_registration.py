@@ -7,6 +7,7 @@ import random
 import string
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from config import roxybrowser as _cfg
 from config import twofa as _twofa_cfg
@@ -217,7 +218,14 @@ def _is_oauth_consent_like(driver) -> bool:
 
 
 def _is_external_idp_url(url: str) -> bool:
-    u = str(url or '').lower()
+    raw = str(url or '').strip()
+    try:
+        parsed = urlsplit(raw)
+        # 邮箱放在 ?email=... 时，邮箱域名可能自然包含 sso/saml 等字样。
+        # 第三方 IdP 判断只看实际导航主机和路径，避免把查询参数当成目标站点。
+        u = f"{parsed.hostname or ''}{parsed.path or ''}".lower()
+    except Exception:
+        u = raw.split('?', 1)[0].split('#', 1)[0].lower()
     return any(x in u for x in (
         'accounts.google.', 'google.com/o/oauth', 'appleid.apple.', 'login.microsoftonline.',
         'login.live.', 'github.com/login/oauth', 'facebook.com/', 'saml', 'sso'
