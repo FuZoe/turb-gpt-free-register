@@ -75,6 +75,21 @@ def _local_proxy_status(proxy: str) -> tuple[bool, bool, str | None]:
         return False, False, f"代理地址解析失败（{type(exc).__name__}）"
 
 
+def _valid_proxy_endpoint(proxy: str) -> bool:
+    """curl 代理必须能解析出主机和端口；拒绝历史环境里的别名占位符。"""
+    value = str(proxy or "").strip()
+    if not value:
+        return False
+    try:
+        parsed = urlparse(value if "://" in value else f"//{value}")
+        scheme = str(parsed.scheme or "").lower()
+        if scheme and scheme not in {"http", "https", "socks5", "socks5h"}:
+            return False
+        return bool(parsed.hostname and parsed.port)
+    except (TypeError, ValueError):
+        return False
+
+
 def resolve_plan_check_route(explicit_proxy: Optional[str] = None) -> dict:
     """解析套餐查询的实际网络路径。
 
@@ -82,6 +97,8 @@ def resolve_plan_check_route(explicit_proxy: Optional[str] = None) -> dict:
     """
     if explicit_proxy is not None:
         selected = str(explicit_proxy or "").strip()
+        if selected and not _valid_proxy_endpoint(selected):
+            raise ValueError(f"请求指定的代理地址无效：{_mask_proxy(selected)}")
         return {
             "proxy": selected,
             "proxy_mode": "request",
@@ -105,8 +122,16 @@ def resolve_plan_check_route(explicit_proxy: Optional[str] = None) -> dict:
         }
 
     selected = str(getattr(proxy_cfg, "PLAN_CHECK_PROXY", "") or "").strip()
+    fallback_reason = None
+    if selected and not _valid_proxy_endpoint(selected):
+        invalid = _mask_proxy(selected)
+        selected = ""
+        fallback_reason = f"PLAN_CHECK_PROXY={invalid} 不是可连接的代理地址，已改用代理池"
+        logger.warning("[Plan] %s", fallback_reason)
     if not selected:
         selected = str(proxy_cfg.pick_proxy() or "").strip()
+    if selected and not _valid_proxy_endpoint(selected):
+        raise ValueError(f"代理池返回的地址无效：{_mask_proxy(selected)}")
     if not selected:
         if mode == "proxy":
             raise ValueError("套餐查询网络模式为 proxy，但未配置 PLAN_CHECK_PROXY 或 PROXY_POOL")
@@ -132,7 +157,7 @@ def resolve_plan_check_route(explicit_proxy: Optional[str] = None) -> dict:
         "proxy_mode": mode,
         "network_route": "proxy",
         "proxy_used": _mask_proxy(selected),
-        "proxy_fallback_reason": None,
+        "proxy_fallback_reason": fallback_reason,
     }
 
 
