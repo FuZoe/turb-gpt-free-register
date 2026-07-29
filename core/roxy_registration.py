@@ -1246,6 +1246,33 @@ def _fill_password_page_if_present(driver, email: str, timeout: int = 25, *, pre
             return password
         if _has_access_token(driver) or not _is_signup_password_page(driver):
             return password
+        # 高负载或代理抖动时第一次提交可能结束转圈后仍留在原页，按钮会重新启用。
+        # 在同一认证态内重新提交一次，避免直接浪费已经填写完成的邮箱与密码。
+        retry_submit = driver.execute_script(r"""
+        const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+          && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none';
+        const input = [...document.querySelectorAll('input[type="password"],input[name*="password" i],input[autocomplete="new-password"]')]
+          .find(el => visible(el) && !el.disabled && !!el.value);
+        if (!input) return {ok:false, reason:'missing_filled_password'};
+        const form = input.closest('form');
+        if (!form) return {ok:false, reason:'missing_password_form'};
+        const submit = [...form.querySelectorAll('button[type="submit"],input[type="submit"],button:not([type])')]
+          .find(el => visible(el) && !el.disabled && el.getAttribute('aria-disabled') !== 'true');
+        if (!submit) return {ok:false, reason:'submit_still_busy'};
+        submit.scrollIntoView({block:'center'});
+        if (typeof form.requestSubmit === 'function') form.requestSubmit(submit); else submit.click();
+        return {ok:true, reason:'retried_password_submit'};
+        """) or {}
+        if retry_submit.get("ok"):
+            logger.warning("%s 密码首次提交未跳转，已自动重新提交一次", _log_prefix(driver))
+            retry_end = time.time() + max(45, timeout)
+            while time.time() < retry_end:
+                if _is_email_verification_page(driver):
+                    logger.info("%s 密码重试提交后已进入邮箱验证码页", _log_prefix(driver))
+                    return password
+                if _has_access_token(driver) or not _is_signup_password_page(driver):
+                    return password
+                time.sleep(0.5)
         raise RuntimeError(f"密码提交后等待页面跳转超时，仍停留在密码页: state={_password_page_state(driver)}")
     logger.info("%s 未检测到密码页，继续后续流程 last=%s", _log_prefix(driver), last)
     return None

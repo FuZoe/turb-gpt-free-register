@@ -135,3 +135,40 @@ def test_type_otp_relocates_input_after_react_detaches_it(monkeypatch):
     reg._type_otp(RerenderingDriver(), "123456", timeout=1)
 
     assert stable.value == "123456"
+
+
+def test_password_submit_retries_once_when_button_becomes_enabled(monkeypatch):
+    class RetryPasswordDriver:
+        current_url = "https://auth.openai.com/create-account/password"
+
+        def __init__(self):
+            self.retried = False
+
+        def execute_script(self, script, *_args):
+            if "const password = String(arguments[0])" in script:
+                return {"ok": True, "reason": "submitted_password"}
+            if "retried_password_submit" in script:
+                self.retried = True
+                return {"ok": True, "reason": "retried_password_submit"}
+            return {
+                "url": self.current_url,
+                "inputs": [{"type": "password", "visible": True, "autocomplete": "new-password"}],
+                "buttons": [{"disabled": False, "visible": True}],
+                "forms": [],
+            }
+
+    clock = [0.0]
+    driver = RetryPasswordDriver()
+    monkeypatch.setattr(reg.time, "time", lambda: clock[0])
+    monkeypatch.setattr(reg.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    monkeypatch.setattr(reg, "_is_email_verification_page", lambda _driver: driver.retried and clock[0] >= 50.0)
+    monkeypatch.setattr(reg, "_has_access_token", lambda _driver: False)
+    monkeypatch.setattr(reg, "_registration_password", lambda: "StrongPassword1!")
+
+    assert reg._fill_password_page_if_present(
+        driver,
+        "user@example.com",
+        timeout=1,
+        prefer_password=True,
+    ) == "StrongPassword1!"
+    assert driver.retried is True
