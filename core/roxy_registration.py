@@ -520,9 +520,14 @@ def _type_otp(driver, code: str, timeout: int = 20) -> None:
         ]:
             els = [e for e in driver.find_elements(By.CSS_SELECTOR, selector) if _visible(e)]
             if len(els) == 1:
-                els[0].clear()
-                els[0].send_keys(code)
-                return
+                try:
+                    els[0].clear()
+                    els[0].send_keys(code)
+                    return
+                except Exception as exc:
+                    # React 切页/重渲染时旧 locator 会瞬间脱离 DOM，下一轮重新定位。
+                    logger.debug("%s[OTP] 输入框已重渲染，重新定位：%s: %s", _log_prefix(driver), type(exc).__name__, exc)
+                    continue
 
         # 6 个分格输入框
         boxes = [e for e in driver.find_elements(By.CSS_SELECTOR, "input") if _visible(e)]
@@ -532,9 +537,12 @@ def _type_otp(driver, code: str, timeout: int = 20) -> None:
             if any(x in attrs.lower() for x in ("numeric", "one-time", "code", "otp", "tel")):
                 numeric_boxes.append(e)
         if len(numeric_boxes) >= len(code):
-            for e, ch in zip(numeric_boxes, code):
-                e.send_keys(ch)
-            return
+            try:
+                for e, ch in zip(numeric_boxes, code):
+                    e.send_keys(ch)
+                return
+            except Exception as exc:
+                logger.debug("%s[OTP] 分格输入框已重渲染，重新定位：%s: %s", _log_prefix(driver), type(exc).__name__, exc)
         time.sleep(0.25)
 
     raise RuntimeError(f"等待 OTP 输入框超时: state={_email_otp_page_state(driver)}")
@@ -1232,6 +1240,12 @@ def _fill_password_page_if_present(driver, email: str, timeout: int = 25, *, pre
             if not _is_signup_password_page(driver):
                 return password
             time.sleep(0.5)
+        # 页面可能恰好在截止点完成导航，最终再读取一次当前状态，避免把已到 OTP 页报成超时。
+        if _is_email_verification_page(driver):
+            logger.info("%s 密码提交在等待截止点进入邮箱验证码页", _log_prefix(driver))
+            return password
+        if _has_access_token(driver) or not _is_signup_password_page(driver):
+            return password
         raise RuntimeError(f"密码提交后等待页面跳转超时，仍停留在密码页: state={_password_page_state(driver)}")
     logger.info("%s 未检测到密码页，继续后续流程 last=%s", _log_prefix(driver), last)
     return None

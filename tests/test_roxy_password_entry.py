@@ -71,3 +71,67 @@ def test_password_submit_does_not_report_success_while_spinner_is_stuck(monkeypa
             timeout=1,
             prefer_password=True,
         )
+
+
+def test_password_submit_accepts_otp_transition_at_deadline(monkeypatch):
+    class SlowPasswordDriver:
+        current_url = "https://auth.openai.com/create-account/password"
+
+        def execute_script(self, script, *_args):
+            if "const password = String(arguments[0])" in script:
+                return {"ok": True, "reason": "submitted_password"}
+            return {
+                "url": self.current_url,
+                "inputs": [{"type": "password", "visible": True, "autocomplete": "new-password"}],
+                "buttons": [{"disabled": True, "visible": True}],
+                "forms": [],
+            }
+
+    clock = [0.0]
+    monkeypatch.setattr(reg.time, "time", lambda: clock[0])
+    monkeypatch.setattr(reg.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    monkeypatch.setattr(reg, "_is_email_verification_page", lambda _driver: clock[0] >= 45.0)
+    monkeypatch.setattr(reg, "_has_access_token", lambda _driver: False)
+    monkeypatch.setattr(reg, "_registration_password", lambda: "StrongPassword1!")
+
+    assert reg._fill_password_page_if_present(
+        SlowPasswordDriver(),
+        "user@example.com",
+        timeout=1,
+        prefer_password=True,
+    ) == "StrongPassword1!"
+
+
+def test_type_otp_relocates_input_after_react_detaches_it(monkeypatch):
+    class DetachedInput:
+        def clear(self):
+            raise RuntimeError("element not found in DOM")
+
+        def send_keys(self, _value):
+            raise AssertionError("detached input must not be used")
+
+    class StableInput:
+        def __init__(self):
+            self.value = None
+
+        def clear(self):
+            self.value = ""
+
+        def send_keys(self, value):
+            self.value = value
+
+    stable = StableInput()
+
+    class RerenderingDriver:
+        def __init__(self):
+            self.calls = 0
+
+        def find_elements(self, _by, _selector):
+            self.calls += 1
+            return [DetachedInput()] if self.calls == 1 else [stable]
+
+    monkeypatch.setattr(reg, "_visible", lambda _element: True)
+
+    reg._type_otp(RerenderingDriver(), "123456", timeout=1)
+
+    assert stable.value == "123456"
