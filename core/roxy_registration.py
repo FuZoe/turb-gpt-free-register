@@ -506,35 +506,38 @@ def _submit_email_and_wait_next(driver, email: str, attempts: int = 3) -> str:
     raise RuntimeError(f"邮箱提交后未进入密码页/验证码页，最后状态={last_state}")
 
 
-def _type_otp(driver, code: str) -> None:
+def _type_otp(driver, code: str, timeout: int = 20) -> None:
     from selenium.webdriver.common.by import By
 
-    # 单输入框
-    for selector in [
-        "input[autocomplete='one-time-code']",
-        "input[name='code']",
-        "input[inputmode='numeric']",
-        "input[type='tel']",
-    ]:
-        els = [e for e in driver.find_elements(By.CSS_SELECTOR, selector) if _visible(e)]
-        if len(els) == 1:
-            els[0].clear()
-            els[0].send_keys(code)
+    end = time.time() + timeout
+    while time.time() < end:
+        # URL 已进入 email-verification 时 DOM 仍可能处于 loading，等待输入框真正挂载。
+        for selector in [
+            "input[autocomplete='one-time-code']",
+            "input[name='code']",
+            "input[inputmode='numeric']",
+            "input[type='tel']",
+        ]:
+            els = [e for e in driver.find_elements(By.CSS_SELECTOR, selector) if _visible(e)]
+            if len(els) == 1:
+                els[0].clear()
+                els[0].send_keys(code)
+                return
+
+        # 6 个分格输入框
+        boxes = [e for e in driver.find_elements(By.CSS_SELECTOR, "input") if _visible(e)]
+        numeric_boxes = []
+        for e in boxes:
+            attrs = " ".join(str(e.get_attribute(k) or "") for k in ("inputmode", "autocomplete", "aria-label", "name", "id", "type"))
+            if any(x in attrs.lower() for x in ("numeric", "one-time", "code", "otp", "tel")):
+                numeric_boxes.append(e)
+        if len(numeric_boxes) >= len(code):
+            for e, ch in zip(numeric_boxes, code):
+                e.send_keys(ch)
             return
+        time.sleep(0.25)
 
-    # 6 个分格输入框
-    boxes = [e for e in driver.find_elements(By.CSS_SELECTOR, "input") if _visible(e)]
-    numeric_boxes = []
-    for e in boxes:
-        attrs = " ".join(str(e.get_attribute(k) or "") for k in ("inputmode", "autocomplete", "aria-label", "name", "id", "type"))
-        if any(x in attrs.lower() for x in ("numeric", "one-time", "code", "otp", "tel")):
-            numeric_boxes.append(e)
-    if len(numeric_boxes) >= len(code):
-        for e, ch in zip(numeric_boxes, code):
-            e.send_keys(ch)
-        return
-
-    raise RuntimeError("找不到 OTP 输入框")
+    raise RuntimeError(f"等待 OTP 输入框超时: state={_email_otp_page_state(driver)}")
 
 
 def _email_otp_page_state(driver) -> dict:
@@ -1105,28 +1108,40 @@ def _click_passwordless_signup_if_present(driver) -> dict:
 
 def _open_signup_password_from_otp(driver, timeout: int = 20) -> bool:
     """从邮箱 OTP 页进入 create-account/password，保留当前浏览器认证态。"""
-    if not _is_email_verification_page(driver):
-        return False
-    result = driver.execute_script(r"""
-    const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
-      && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none';
-    const candidates = [...document.querySelectorAll('a,button,[role="button"],[role="link"]')].filter(visible);
-    const target = candidates.find(el => {
-      const attrs = [el.getAttribute('href'), el.getAttribute('formaction'), el.getAttribute('value'),
-        el.getAttribute('name'), el.getAttribute('data-testid'), el.textContent].join(' ').toLowerCase();
-      return attrs.includes('create-account/password') || attrs.includes('continue_with_password')
-        || attrs.includes('continue-with-password');
-    });
-    if (!target) return {ok:false, reason:'missing_password_entry'};
-    target.scrollIntoView({block:'center'});
-    target.click();
-    return {ok:true, reason:'clicked_password_entry'};
-    """) or {}
-    if not result.get("ok"):
-        logger.warning("%s OTP 页未找到密码入口：%s", _log_prefix(driver), result)
-        return False
     end = time.time() + timeout
+    result = {}
+    # auth URL 会先切到 email-verification，React DOM 随后才挂载；等按钮出现再判断。
     while time.time() < end:
+        if _is_signup_password_page(driver):
+            return True
+        if not _is_email_verification_page(driver):
+            time.sleep(0.25)
+            continue
+        result = driver.execute_script(r"""
+        const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+          && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none';
+        const candidates = [...document.querySelectorAll('a,button,[role="button"],[role="link"]')].filter(visible);
+        const target = candidates.find(el => {
+          const attrs = [el.getAttribute('href'), el.getAttribute('formaction'), el.getAttribute('value'),
+            el.getAttribute('name'), el.getAttribute('data-testid'), el.textContent].join(' ').toLowerCase();
+          return attrs.includes('create-account/password') || attrs.includes('continue_with_password')
+            || attrs.includes('continue-with-password') || attrs.includes('continue with password')
+            || attrs.includes('パスワードで続行') || attrs.includes('使用密码继续')
+            || attrs.includes('使用密碼繼續');
+        });
+        if (!target) return {ok:false, reason:'password_entry_not_ready', readyState:document.readyState};
+        target.scrollIntoView({block:'center'});
+        target.click();
+        return {ok:true, reason:'clicked_password_entry'};
+        """) or {}
+        if result.get("ok"):
+            break
+        time.sleep(0.25)
+    if not result.get("ok"):
+        logger.warning("%s OTP 页等待密码入口超时：%s state=%s", _log_prefix(driver), result, _email_otp_page_state(driver))
+        return False
+    navigation_end = time.time() + timeout
+    while time.time() < navigation_end:
         if _is_signup_password_page(driver):
             logger.info("%s 已从 OTP 页进入 create-account/password", _log_prefix(driver))
             return True
@@ -1206,7 +1221,7 @@ def _fill_password_page_if_present(driver, email: str, timeout: int = 25, *, pre
             raise RuntimeError(f"密码页处理失败：{result} state={last}")
         logger.info("%s 已填写并提交密码页", _log_prefix(driver))
         # 提交密码后通常进入邮箱验证码页，最多等一段时间。
-        wait_end = time.time() + 20
+        wait_end = time.time() + max(45, timeout)
         while time.time() < wait_end:
             if _is_email_verification_page(driver):
                 logger.info("%s 密码提交后已进入邮箱验证码页", _log_prefix(driver))
@@ -1217,7 +1232,7 @@ def _fill_password_page_if_present(driver, email: str, timeout: int = 25, *, pre
             if not _is_signup_password_page(driver):
                 return password
             time.sleep(0.5)
-        return password
+        raise RuntimeError(f"密码提交后等待页面跳转超时，仍停留在密码页: state={_password_page_state(driver)}")
     logger.info("%s 未检测到密码页，继续后续流程 last=%s", _log_prefix(driver), last)
     return None
 
