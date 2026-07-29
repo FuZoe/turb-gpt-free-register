@@ -46,6 +46,23 @@
     }
     .stat span { display: block; color: #b8c7d9; font-size: 11px; }
     .stat strong { display: block; margin-top: 3px; font-size: 18px; }
+    .runtime-resource {
+      position: fixed; left: 12px; bottom: 12px; z-index: 80; width: 250px;
+      padding: 10px 12px; border: 1px solid #cad5e2; border-radius: 10px;
+      background: rgba(255,255,255,.96); box-shadow: 0 8px 24px rgba(15,23,42,.16);
+      backdrop-filter: blur(8px); font-size: 12px; color: #344054;
+    }
+    .runtime-resource-head { display:flex; justify-content:space-between; align-items:center; gap:8px; font-weight:900; }
+    .runtime-resource-value { color:#172033; font-family:ui-monospace,Consolas,monospace; }
+    .runtime-resource-bar { height:7px; margin:7px 0 6px; overflow:hidden; border-radius:999px; background:#e8eef5; }
+    .runtime-resource-bar i { display:block; width:0; height:100%; border-radius:inherit; background:#16803c; transition:width .3s ease,background .3s ease; }
+    .runtime-resource-meta { color:#667085; line-height:1.45; }
+    .runtime-resource-state { color:#16803c; font-weight:800; }
+    .runtime-resource.warn .runtime-resource-bar i { background:#b7791f; }
+    .runtime-resource.danger .runtime-resource-bar i { background:#c2413a; }
+    .runtime-resource.warn .runtime-resource-state { color:#b7791f; }
+    .runtime-resource.danger .runtime-resource-state { color:#c2413a; }
+    @media (max-width: 640px) { .runtime-resource { left:8px; right:8px; bottom:8px; width:auto; } }
     nav {
       width: 100%; max-width: 100%; overflow: hidden;
       padding: 0; background: #1b2538;
@@ -389,6 +406,16 @@
     <button data-tab="config">配置</button>
   </div>
 </nav>
+
+<div class="runtime-resource" id="runtimeResource" title="systemd cgroup 实时用量；内存硬上限由 MemoryMax 控制">
+  <div class="runtime-resource-head">
+    <span>注册机内存</span>
+    <span class="runtime-resource-value" id="runtimeMemory">读取中…</span>
+  </div>
+  <div class="runtime-resource-bar"><i id="runtimeMemoryBar"></i></div>
+  <div class="runtime-resource-meta" id="runtimeResourceMeta">Swap - · 进程 -</div>
+  <div class="runtime-resource-state" id="runtimeResourceState">服务状态读取中</div>
+</div>
 
 <main>
   <!-- ============ 注册 ============ -->
@@ -745,6 +772,39 @@ async function api(url, opts) {
 function debounce(fn, wait=250) {
   let t = null;
   return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), wait); };
+}
+
+function bytesText(value) {
+  if (value == null || !Number.isFinite(Number(value))) return '-';
+  const n = Number(value);
+  const units = ['B','KB','MB','GB','TB'];
+  let v = n, i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v >= 100 || i === 0 ? v.toFixed(0) : v.toFixed(1)} ${units[i]}`;
+}
+function durationText(seconds) {
+  seconds = Math.max(0, Number(seconds || 0));
+  const d = Math.floor(seconds / 86400), h = Math.floor(seconds % 86400 / 3600), m = Math.floor(seconds % 3600 / 60);
+  return d ? `${d}天${h}小时` : h ? `${h}小时${m}分` : `${m}分钟`;
+}
+async function loadRuntimeResources() {
+  const box = $('#runtimeResource');
+  try {
+    const r = await api('/api/runtime/resources');
+    const pct = Number(r.memory_percent || 0);
+    $('#runtimeMemory').textContent = `${bytesText(r.memory_current_bytes)} / ${bytesText(r.memory_max_bytes)} (${pct.toFixed(1)}%)`;
+    $('#runtimeMemoryBar').style.width = `${Math.max(0, Math.min(100, pct))}%`;
+    $('#runtimeResourceMeta').textContent = `Swap ${bytesText(r.swap_current_bytes)} / ${bytesText(r.swap_max_bytes)} · 任务进程 ${fmt(r.pids_current)}/${fmt(r.pids_max)}`;
+    const previousPid = localStorage.getItem('turb_runtime_pid');
+    const restarted = previousPid && previousPid !== String(r.pid);
+    localStorage.setItem('turb_runtime_pid', String(r.pid));
+    $('#runtimeResourceState').textContent = restarted ? `服务刚重启 · PID ${r.pid}` : `运行 ${durationText(r.uptime_seconds)} · PID ${r.pid}`;
+    box.classList.toggle('danger', pct >= 95);
+    box.classList.toggle('warn', pct >= 80 && pct < 95);
+  } catch(e) {
+    $('#runtimeResourceState').textContent = '服务状态连接中…';
+    box.classList.add('danger');
+  }
 }
 
 // ---------- Tab 切换 ----------
@@ -3116,9 +3176,11 @@ document.addEventListener('click', (e) => {
 
 // ---------- 初始化 ----------
 loadSummary();
+loadRuntimeResources();
 activateTab(localStorage.getItem('gpt_console_active_tab') || 'register', false);
 jobsTimer = setInterval(() => { if (!$('#tab-register').classList.contains('hidden')) refreshJobs(); }, 3000);
 setInterval(loadSummary, 5000);
+setInterval(loadRuntimeResources, 2000);
 setInterval(() => { if (!$('#tab-accounts').classList.contains('hidden')) pollAccountPlanStatuses(); }, 2000);
 </script>
 </body>

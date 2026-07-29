@@ -23,6 +23,7 @@ from webui.auth import configured_tenants, init_auth, register_auth_routes
 from core import registration_service as svc
 from core.tenant_context import current_tenant, tenant_scope
 from webui import config_editor
+from webui.runtime_resources import read_runtime_resources
 
 logger = logging.getLogger(__name__)
 
@@ -263,6 +264,11 @@ def create_app(auth_code: str | None = None) -> Flask:
             "domain_used": domain_pool.get("used", 0),
             "domain_failed": domain_pool.get("failed", 0),
         })
+
+    @app.get("/api/runtime/resources")
+    def api_runtime_resources():
+        """返回当前注册机 systemd/cgroup 的实时内存、Swap 与进程数。"""
+        return jsonify(read_runtime_resources())
 
     # ----------------------------------------------------------
     # 已注册账号
