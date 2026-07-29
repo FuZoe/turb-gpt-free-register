@@ -1103,7 +1103,39 @@ def _click_passwordless_signup_if_present(driver) -> dict:
         return {"ok": False, "reason": f"{type(exc).__name__}: {exc}"}
 
 
-def _fill_password_page_if_present(driver, email: str, timeout: int = 25) -> str | None:
+def _open_signup_password_from_otp(driver, timeout: int = 20) -> bool:
+    """从邮箱 OTP 页进入 create-account/password，保留当前浏览器认证态。"""
+    if not _is_email_verification_page(driver):
+        return False
+    result = driver.execute_script(r"""
+    const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+      && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none';
+    const candidates = [...document.querySelectorAll('a,button,[role="button"],[role="link"]')].filter(visible);
+    const target = candidates.find(el => {
+      const attrs = [el.getAttribute('href'), el.getAttribute('formaction'), el.getAttribute('value'),
+        el.getAttribute('name'), el.getAttribute('data-testid'), el.textContent].join(' ').toLowerCase();
+      return attrs.includes('create-account/password') || attrs.includes('continue_with_password')
+        || attrs.includes('continue-with-password');
+    });
+    if (!target) return {ok:false, reason:'missing_password_entry'};
+    target.scrollIntoView({block:'center'});
+    target.click();
+    return {ok:true, reason:'clicked_password_entry'};
+    """) or {}
+    if not result.get("ok"):
+        logger.warning("%s OTP 页未找到密码入口：%s", _log_prefix(driver), result)
+        return False
+    end = time.time() + timeout
+    while time.time() < end:
+        if _is_signup_password_page(driver):
+            logger.info("%s 已从 OTP 页进入 create-account/password", _log_prefix(driver))
+            return True
+        time.sleep(0.5)
+    logger.warning("%s 点击密码入口后等待 create-account/password 超时", _log_prefix(driver))
+    return False
+
+
+def _fill_password_page_if_present(driver, email: str, timeout: int = 25, *, prefer_password: bool = False) -> str | None:
     """邮箱提交后兼容 create-account/password。返回本次设置的 OpenAI 账号密码；未遇到密码页返回 None。"""
     end = time.time() + timeout
     last = {}
@@ -1118,7 +1150,7 @@ def _fill_password_page_if_present(driver, email: str, timeout: int = 25) -> str
         if not (is_signup_password or is_login_password):
             time.sleep(0.5)
             continue
-        passwordless = _click_passwordless_signup_if_present(driver)
+        passwordless = {} if prefer_password else _click_passwordless_signup_if_present(driver)
         if passwordless.get('ok'):
             logger.info("%s 检测到 password 页，已点击一次性验证码入口：email=%s detail=%s", _log_prefix(driver), email, passwordless)
             wait_end = time.time() + 20
