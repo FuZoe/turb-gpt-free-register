@@ -115,6 +115,7 @@ cp .env.example .env
 当前支持从 `.env` 读取的密钥：
 
 - `WEBUI_AUTH_CODE`（WebUI 登录授权码）
+- `WEBUI_TENANT_AUTH_CODES`（可选，JSON 格式的租户名到授权码映射；租户数据相互隔离）
 - `WEBUI_SESSION_SECRET`（可选，Session Cookie 签名密钥）
 - `BROWSER_USE_API_KEY`
 - `SKYVERN_API_KEY`

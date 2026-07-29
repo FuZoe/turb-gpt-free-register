@@ -19,14 +19,21 @@ import requests
 
 from config import email as _email_cfg
 from core.otp_utils import extract_otp
+from core.tenant_context import current_tenant, tenant_path, tenant_root
 
 logger = logging.getLogger(__name__)
 
 _CODE_REGEX = re.compile(r"\b(\d{6})\b")
 _CONTEXT_WORDS = ("code", "verify", "verification", "验证码", "代码", "确认码", "認証", "コード")
-_CONTEXT_CACHE: dict[str, "GenericApiEmailAccount"] = {}
+_CONTEXT_CACHE: dict[object, "GenericApiEmailAccount"] = {}
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _ACCOUNTS_FILE = _PROJECT_ROOT / "用于注册的API邮箱.txt"
+
+
+def _cache_key(email: str) -> object:
+    tenant_id = current_tenant()
+    normalized = str(email or "").strip().lower()
+    return normalized if tenant_id == "default" else (tenant_id, normalized)
 
 
 class GenericApiMailError(RuntimeError):
@@ -101,7 +108,7 @@ def pick_account() -> GenericApiEmailAccount:
             f"通用 API 邮箱池没有可用账号: {summary}. 请在 WebUI 邮箱池导入：邮箱----取码地址"
         )
     account = GenericApiEmailAccount(email=row["email"], code_url=row["code_url"])
-    _CONTEXT_CACHE[account.email] = account
+    _CONTEXT_CACHE[_cache_key(account.email)] = account
     logger.info(f"[GenericAPI] 选中邮箱: {account.email}（DB id={row.get('id')}）")
     return account
 
@@ -109,9 +116,9 @@ def pick_account() -> GenericApiEmailAccount:
 def import_from_file(path: str | Path | None = None) -> tuple[int, int]:
     """从文本文件导入通用 API 邮箱，每行：email----code_url 或 email====code_url。"""
     from core.db import import_generic_api_emails
-    p = Path(path) if path else _ACCOUNTS_FILE
+    p = Path(path) if path else tenant_path(_PROJECT_ROOT, _ACCOUNTS_FILE)
     if not p.is_absolute():
-        p = _PROJECT_ROOT / p
+        p = tenant_root(_PROJECT_ROOT) / p
     if not p.exists():
         return 0, 0
     records = []
@@ -128,21 +135,22 @@ def import_from_file(path: str | Path | None = None) -> tuple[int, int]:
 
 
 def get_account_context(email: str) -> GenericApiEmailAccount | None:
-    if email in _CONTEXT_CACHE:
-        return _CONTEXT_CACHE[email]
+    key = _cache_key(email)
+    if key in _CONTEXT_CACHE:
+        return _CONTEXT_CACHE[key]
     from core.db import get_generic_api_email_by_email
     row = get_generic_api_email_by_email(email)
     if row is None:
         return None
     account = GenericApiEmailAccount(email=row["email"], code_url=row["code_url"])
-    _CONTEXT_CACHE[email] = account
+    _CONTEXT_CACHE[key] = account
     return account
 
 
 def release_account(email: str, status: str = "available", note: str | None = None) -> None:
     from core.db import release_generic_api_email
     release_generic_api_email(email, status=status, note=note)
-    _CONTEXT_CACHE.pop(email, None)
+    _CONTEXT_CACHE.pop(_cache_key(email), None)
 
 
 def fetch_latest_otp(

@@ -19,6 +19,8 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
+from core.tenant_context import tenant_path, tenant_root
+
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _DATA_DIR = _PROJECT_ROOT
 _LEGACY_DATA_DIR = _PROJECT_ROOT / "data"
@@ -47,17 +49,22 @@ _LEGACY_JOBS_JSON = _LEGACY_DATA_DIR / "registration_jobs.json"
 _LOCK = threading.RLock()
 
 
+def _path(path: Path) -> Path:
+    return tenant_path(_PROJECT_ROOT, path)
+
+
 def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
 def _ensure_storage() -> None:
-    _DATA_DIR.mkdir(parents=True, exist_ok=True)
-    _LOG_DIR.mkdir(parents=True, exist_ok=True)
+    tenant_root(_PROJECT_ROOT).mkdir(parents=True, exist_ok=True)
+    _path(_LOG_DIR).mkdir(parents=True, exist_ok=True)
 
 
 def _read_json(path: Path, default: Any) -> Any:
     _ensure_storage()
+    path = _path(path)
     if not path.exists():
         return default
     try:
@@ -68,6 +75,7 @@ def _read_json(path: Path, default: Any) -> Any:
 
 def _write_json(path: Path, data: Any) -> None:
     _ensure_storage()
+    path = _path(path)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(
         json.dumps(data, ensure_ascii=False, indent=2),
@@ -121,18 +129,18 @@ def _registered_email_line(row: dict) -> str:
 def _sync_outlook_txt(rows: list[dict]) -> None:
     available_rows = [r for r in rows if r.get("status") == "available"]
     lines = [_outlook_line(r) for r in sorted(available_rows, key=lambda x: int(x.get("id") or 0))]
-    _OUTLOOK_TXT.write_text(("\n".join(lines) + ("\n" if lines else "")), encoding="utf-8")
+    _path(_OUTLOOK_TXT).write_text(("\n".join(lines) + ("\n" if lines else "")), encoding="utf-8")
 
 
 def _sync_generic_api_email_txt(rows: list[dict]) -> None:
     available_rows = [r for r in rows if r.get("status") == "available"]
     lines = [_generic_api_email_line(r) for r in sorted(available_rows, key=lambda x: int(x.get("id") or 0))]
-    _GENERIC_API_EMAIL_TXT.write_text(("\n".join(lines) + ("\n" if lines else "")), encoding="utf-8")
+    _path(_GENERIC_API_EMAIL_TXT).write_text(("\n".join(lines) + ("\n" if lines else "")), encoding="utf-8")
 
 
 def _sync_accounts_txt(rows: list[dict]) -> None:
     lines = [_registered_email_line(r) for r in sorted(rows, key=lambda x: int(x.get("id") or 0))]
-    _ACCOUNTS_TXT.write_text(("\n".join(lines) + ("\n" if lines else "")), encoding="utf-8")
+    _path(_ACCOUNTS_TXT).write_text(("\n".join(lines) + ("\n" if lines else "")), encoding="utf-8")
 
 
 def _sync_tokens_txt(rows: list[dict]) -> None:
@@ -141,7 +149,7 @@ def _sync_tokens_txt(rows: list[dict]) -> None:
         for r in sorted(rows, key=lambda x: int(x.get("id") or 0))
         if r.get("access_token")
     ]
-    _TOKENS_TXT.write_text(("\n".join(tokens) + ("\n" if tokens else "")), encoding="utf-8")
+    _path(_TOKENS_TXT).write_text(("\n".join(tokens) + ("\n" if tokens else "")), encoding="utf-8")
 
 
 def _viewer_snapshot(outlook_rows: list[dict], account_rows: list[dict]) -> dict:
@@ -442,23 +450,24 @@ render();
 </body>
 </html>
 """
-    tmp = _VIEWER_HTML.with_suffix(".html.tmp")
+    viewer_html = _path(_VIEWER_HTML)
+    tmp = viewer_html.with_suffix(".html.tmp")
     tmp.write_text(html_text, encoding="utf-8")
     try:
-        tmp.replace(_VIEWER_HTML)
-        return _VIEWER_HTML
+        tmp.replace(viewer_html)
+        return viewer_html
     except PermissionError:
         # Windows 下如果目标 HTML 正被浏览器或编辑器短暂占用，原子替换可能失败。
         # 先尝试直接覆盖；仍失败时写一个时间戳快照，避免注册流程被查看页刷新阻断。
         try:
-            _VIEWER_HTML.write_text(html_text, encoding="utf-8")
+            viewer_html.write_text(html_text, encoding="utf-8")
             try:
                 tmp.unlink()
             except OSError:
                 pass
-            return _VIEWER_HTML
+            return viewer_html
         except PermissionError:
-            fallback = _DATA_DIR / f"accounts_viewer_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
+            fallback = tenant_root(_PROJECT_ROOT) / f"accounts_viewer_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
             fallback.write_text(html_text, encoding="utf-8")
             try:
                 tmp.unlink()
@@ -1758,10 +1767,11 @@ def list_codex_accounts() -> list[dict]:
     """
     with _LOCK:
         out = []
-        if not _CODEX_DIR.exists():
+        codex_dir = _path(_CODEX_DIR)
+        if not codex_dir.exists():
             return out
         export_state = _load_codex_export_state()
-        for path in sorted(_CODEX_DIR.glob("codex-*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        for path in sorted(codex_dir.glob("codex-*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
             try:
                 content = json.loads(path.read_text(encoding="utf-8"))
             except Exception:
@@ -1818,7 +1828,7 @@ def read_codex_credential(filename: str) -> tuple[str, str]:
             raise ValueError(f"非法文件名: {filename}")
         if "/" in filename or "\\" in filename or ".." in filename:
             raise ValueError(f"非法文件名: {filename}")
-        path = _CODEX_DIR / filename
+        path = _path(_CODEX_DIR) / filename
         if not path.exists() or not path.is_file():
             raise ValueError(f"文件不存在: {filename}")
         return path.read_text(encoding="utf-8"), filename
@@ -1855,7 +1865,7 @@ def delete_codex_credential(filename: str) -> bool:
             raise ValueError(f"非法文件名: {filename}")
         if "/" in filename or "\\" in filename or ".." in filename:
             raise ValueError(f"非法文件名: {filename}")
-        path = _CODEX_DIR / filename
+        path = _path(_CODEX_DIR) / filename
         if not path.exists() or not path.is_file():
             return False
         path.unlink()
@@ -1896,7 +1906,7 @@ def _new_job_row(
     account_id: int | None = None,
 ) -> dict:
     job_uuid = str(uuid.uuid4())
-    log_file = str(_LOG_DIR / f"{job_uuid}.log")
+    log_file = str(_path(_LOG_DIR) / f"{job_uuid}.log")
     Path(log_file).parent.mkdir(parents=True, exist_ok=True)
     return {
         "id": _next_id(rows),
@@ -2079,10 +2089,11 @@ def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
 
 def _migrate_legacy_sqlite() -> dict:
     summary = {"sqlite_accounts_imported": 0, "sqlite_outlook_imported": 0, "sqlite_outlook_skipped": 0}
-    if not _LEGACY_SQLITE.exists():
+    legacy_sqlite = _path(_LEGACY_SQLITE)
+    if not legacy_sqlite.exists():
         return summary
     try:
-        conn = sqlite3.connect(str(_LEGACY_SQLITE))
+        conn = sqlite3.connect(str(legacy_sqlite))
         conn.row_factory = sqlite3.Row
         if _table_exists(conn, "outlook_pool"):
             records = []
@@ -2139,7 +2150,7 @@ def migrate_legacy_files() -> dict:
     }
     summary.update(_migrate_legacy_sqlite())
 
-    accounts_dir = _PROJECT_ROOT / "accounts"
+    accounts_dir = tenant_root(_PROJECT_ROOT) / "accounts"
     if accounts_dir.exists():
         for jf in accounts_dir.glob("*.json"):
             try:
@@ -2164,7 +2175,7 @@ def migrate_legacy_files() -> dict:
             except Exception:
                 continue
 
-    for txt in (_PROJECT_ROOT / "outlook_accounts.txt", _OUTLOOK_TXT):
+    for txt in (tenant_root(_PROJECT_ROOT) / "outlook_accounts.txt", _path(_OUTLOOK_TXT)):
         if txt.exists():
             records = []
             for line in txt.read_text(encoding="utf-8").splitlines():
@@ -2189,7 +2200,7 @@ def migrate_legacy_files() -> dict:
             summary["outlook_imported"] += ins
             summary["outlook_skipped"] += skip
 
-    used = _PROJECT_ROOT / "outlook_accounts_used.json"
+    used = tenant_root(_PROJECT_ROOT) / "outlook_accounts_used.json"
     if used.exists():
         try:
             emails = json.loads(used.read_text(encoding="utf-8"))
@@ -2203,19 +2214,19 @@ def migrate_legacy_files() -> dict:
 
 def db_path() -> Path:
     """兼容旧名称，返回当前文件存储目录。"""
-    return _DATA_DIR
+    return tenant_root(_PROJECT_ROOT)
 
 
 def storage_paths() -> dict:
     return {
-        "outlook_json": str(_OUTLOOK_JSON),
-        "outlook_txt": str(_OUTLOOK_TXT),
-        "accounts_json": str(_ACCOUNTS_JSON),
-        "accounts_txt": str(_ACCOUNTS_TXT),
-        "tokens_txt": str(_TOKENS_TXT),
-        "viewer_html": str(_VIEWER_HTML),
-        "jobs_json": str(_JOBS_JSON),
-        "logs_dir": str(_LOG_DIR),
+        "outlook_json": str(_path(_OUTLOOK_JSON)),
+        "outlook_txt": str(_path(_OUTLOOK_TXT)),
+        "accounts_json": str(_path(_ACCOUNTS_JSON)),
+        "accounts_txt": str(_path(_ACCOUNTS_TXT)),
+        "tokens_txt": str(_path(_TOKENS_TXT)),
+        "viewer_html": str(_path(_VIEWER_HTML)),
+        "jobs_json": str(_path(_JOBS_JSON)),
+        "logs_dir": str(_path(_LOG_DIR)),
     }
 
 

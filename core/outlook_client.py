@@ -47,13 +47,20 @@ from config import (
 # OTP_POLL_INTERVAL / OTP_MAX_WAIT 是 WebUI 可热改的，从模块读
 from config import email as _email_cfg
 from core.otp_utils import looks_like_openai_email, extract_otp
+from core.tenant_context import current_tenant, tenant_path, tenant_root
 
 logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # 邮箱 → account 上下文的内存缓存，fetch_latest_otp 用
-_CONTEXT_CACHE: dict[str, "OutlookAccount"] = {}
+_CONTEXT_CACHE: dict[object, "OutlookAccount"] = {}
+
+
+def _cache_key(email: str) -> object:
+    tenant_id = current_tenant()
+    normalized = str(email or "").strip().lower()
+    return normalized if tenant_id == "default" else (tenant_id, normalized)
 
 # 远端 mail.chatai.codes 被禁用时，本进程内直接跳过远端，走 Microsoft Graph 直连。
 _REMOTE_DISABLED = False
@@ -274,15 +281,16 @@ def pick_account() -> OutlookAccount:
         client_id=row["client_id"],
         refresh_token=row["refresh_token"],
     )
-    _CONTEXT_CACHE[account.email] = account
+    _CONTEXT_CACHE[_cache_key(account.email)] = account
     logger.info(f"[Outlook] 选中账号: {account.email}（DB id={row['id']}）")
     return account
 
 
 def get_account_context(email: str) -> OutlookAccount | None:
     """根据邮箱查 OutlookAccount 上下文。优先内存缓存，fallback 查 DB。"""
-    if email in _CONTEXT_CACHE:
-        return _CONTEXT_CACHE[email]
+    key = _cache_key(email)
+    if key in _CONTEXT_CACHE:
+        return _CONTEXT_CACHE[key]
     from core.db import get_outlook_by_email
     row = get_outlook_by_email(email)
     if row is None:
@@ -293,7 +301,7 @@ def get_account_context(email: str) -> OutlookAccount | None:
         client_id=row["client_id"],
         refresh_token=row["refresh_token"],
     )
-    _CONTEXT_CACHE[email] = account
+    _CONTEXT_CACHE[key] = account
     return account
 
 
@@ -301,15 +309,15 @@ def release_account(email: str, status: str = "available", note: str | None = No
     """按注册阶段结果更新 Outlook 账号状态：可重试回 available，已消耗则标记 failed。"""
     from core.db import release_outlook
     release_outlook(email, status=status, note=note)
-    _CONTEXT_CACHE.pop(email, None)
+    _CONTEXT_CACHE.pop(_cache_key(email), None)
 
 
 def import_outlook_from_file(path: str | Path | None = None) -> tuple[int, int]:
     """读取一份账号文本文件，全量导入 DB，返回 (新增, 已存在跳过)。"""
     from core.db import import_outlook_accounts
-    p = Path(path or OUTLOOK_ACCOUNTS_FILE)
+    p = Path(path) if path else tenant_path(_PROJECT_ROOT, Path(OUTLOOK_ACCOUNTS_FILE))
     if not p.is_absolute():
-        p = _PROJECT_ROOT / p
+        p = tenant_root(_PROJECT_ROOT) / p
     accounts = _parse_accounts_file(p)
     records = [
         {"email": a.email, "password": a.password, "client_id": a.client_id, "refresh_token": a.refresh_token}

@@ -15,6 +15,7 @@ import requests
 
 from config import email as _email_cfg
 from core.otp_utils import extract_otp, looks_like_openai_email
+from core.tenant_context import current_tenant
 
 logger = logging.getLogger(__name__)
 
@@ -31,13 +32,15 @@ class CloudMailAccount:
     domain: str
 
 
-_CONTEXT_CACHE: dict[str, CloudMailAccount] = {}
+_CONTEXT_CACHE: dict[object, CloudMailAccount] = {}
 _DOMAIN_CACHE: tuple[float, list[str]] | None = None
 DOMAIN_CACHE_TTL = 300
 
 
-def _cache_key(email: str) -> str:
-    return str(email or "").strip().lower()
+def _cache_key(email: str) -> object:
+    tenant_id = current_tenant()
+    normalized = str(email or "").strip().lower()
+    return normalized if tenant_id == "default" else (tenant_id, normalized)
 
 
 def _base_url(value: str | None = None) -> str:

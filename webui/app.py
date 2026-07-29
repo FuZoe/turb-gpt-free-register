@@ -19,8 +19,9 @@ from urllib.parse import urlparse
 from flask import Flask, Response, jsonify, render_template, request
 
 from core import codex_retry_service, db, plan_check_service, extract_link_service, codex_agent_service
-from webui.auth import init_auth, register_auth_routes
+from webui.auth import configured_tenants, init_auth, register_auth_routes
 from core import registration_service as svc
+from core.tenant_context import current_tenant, tenant_scope
 from webui import config_editor
 
 logger = logging.getLogger(__name__)
@@ -186,14 +187,16 @@ def create_app(auth_code: str | None = None) -> Flask:
             "filename": filename,
             "mimetype": mimetype,
             "created_at": now,
+            "tenant_id": current_tenant(),
         }
         return download_id
 
     @app.get("/api/downloads/<download_id>")
     def api_prepared_download(download_id: str):
-        item = _prepared_downloads.pop(str(download_id or ""), None)
-        if not item:
+        item = _prepared_downloads.get(str(download_id or ""))
+        if not item or item.get("tenant_id") != current_tenant():
             return jsonify({"ok": False, "error": "下载已过期或不存在，请重新生成"}), 404
+        _prepared_downloads.pop(str(download_id or ""), None)
         content = item.get("content") or b""
         filename = item.get("filename") or "download.zip"
         mimetype = item.get("mimetype") or "application/octet-stream"
@@ -212,15 +215,15 @@ def create_app(auth_code: str | None = None) -> Flask:
 
     init_auth(app, auth_code=auth_code)
     register_auth_routes(app)
-    recovered_plan_checks = db.recover_interrupted_plan_checks()
-    if recovered_plan_checks:
-        logger.warning("已恢复 %s 个因 WebUI 重启中断的套餐查询状态", recovered_plan_checks)
-    recovered_extract_links = db.recover_interrupted_extract_links()
-    if recovered_extract_links:
-        logger.warning("已恢复 %s 个因 WebUI 重启中断的提链状态", recovered_extract_links)
-    recovered_codex_agents = db.recover_interrupted_codex_agents()
-    if recovered_codex_agents:
-        logger.warning("已恢复 %s 个因 WebUI 重启中断的 Codex Agent Token 状态", recovered_codex_agents)
+    for tenant_id in configured_tenants():
+        with tenant_scope(tenant_id):
+            recovered_jobs = svc.recover_interrupted_jobs()
+            recovered_plan_checks = db.recover_interrupted_plan_checks()
+            recovered_extract_links = db.recover_interrupted_extract_links()
+            recovered_codex_agents = db.recover_interrupted_codex_agents()
+            recovered_total = recovered_jobs + recovered_plan_checks + recovered_extract_links + recovered_codex_agents
+            if recovered_total:
+                logger.warning("租户 %s 启动时已恢复 %s 个中断状态", tenant_id, recovered_total)
 
     # ----------------------------------------------------------
     # 页面
@@ -2252,6 +2255,8 @@ def create_app(auth_code: str | None = None) -> Flask:
     # ----------------------------------------------------------
     @app.get("/api/config")
     def api_config_get():
+        if current_tenant() != "default":
+            return jsonify({"ok": False, "error": "租户账号仅使用管理员共享配置"}), 403
         return jsonify(config_editor.get_config())
 
     @app.post("/api/cloudmail/gen-token")
@@ -2345,6 +2350,8 @@ def create_app(auth_code: str | None = None) -> Flask:
 
     @app.post("/api/config")
     def api_config_set():
+        if current_tenant() != "default":
+            return jsonify({"ok": False, "error": "租户账号仅使用管理员共享配置"}), 403
         data = request.get_json(silent=True) or {}
         updates = data.get("updates") if isinstance(data.get("updates"), dict) else data
         if not isinstance(updates, dict) or not updates:

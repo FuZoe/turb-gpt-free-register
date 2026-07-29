@@ -23,6 +23,7 @@ EXPLICIT_EMPTY_LIST_ENV_KEYS = {"PROXY_POOL"}
 # 统一管理：env key -> 说明（.env.example 用）
 SECRET_ENV_KEYS: dict[str, str] = {
     "WEBUI_AUTH_CODE": "WebUI 登录授权码",
+    "WEBUI_TENANT_AUTH_CODES": "WebUI 额外租户授权码（JSON：租户名 -> 授权码）",
     "WEBUI_SESSION_SECRET": "WebUI Session Cookie 签名密钥",
     "REGISTER_PASSWORD": "ChatGPT 注册密码",
     "BROWSER_USE_API_KEY": "Browser Use Cloud API Key",

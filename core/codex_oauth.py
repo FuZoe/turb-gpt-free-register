@@ -46,6 +46,7 @@ from core.openai_auth import (
     network_preflight,
 )
 from core import sms_provider
+from core.tenant_context import tenant_root
 from curl_cffi import requests as curl_requests
 
 logger = logging.getLogger(__name__)
@@ -1155,7 +1156,7 @@ def _credential_file_name(email: str, plan_type: str) -> str:
 
 def save_codex_credential(storage: dict, email: str, plan_type: str) -> Path:
     """落盘到 {PROJECT_ROOT}/{CODEX_OUTPUT_DIRNAME}/codex-{email}.json。"""
-    out_dir = _PROJECT_ROOT / _cfg.CODEX_OUTPUT_DIRNAME
+    out_dir = tenant_root(_PROJECT_ROOT) / _cfg.CODEX_OUTPUT_DIRNAME
     out_dir.mkdir(parents=True, exist_ok=True)
     fname = _credential_file_name(email, plan_type)
     path = out_dir / fname
@@ -1224,7 +1225,7 @@ def _save_cpa_local_record(
     if not bool(getattr(_cfg, "CPA_SAVE_CALLBACK_RECEIPT", True)):
         return None
 
-    out_dir = _PROJECT_ROOT / _cfg.CODEX_OUTPUT_DIRNAME
+    out_dir = tenant_root(_PROJECT_ROOT) / _cfg.CODEX_OUTPUT_DIRNAME
     out_dir.mkdir(parents=True, exist_ok=True)
     safe_email = (email or "unknown").strip().replace("/", "_").replace("\\", "_")
     path = out_dir / f"codex-{safe_email}-cpa-callback.json"
@@ -1261,7 +1262,7 @@ def _save_sub2_local_record(
     if not bool(getattr(_cfg, "CPA_SAVE_CALLBACK_RECEIPT", True)):
         return None
 
-    out_dir = _PROJECT_ROOT / _cfg.CODEX_OUTPUT_DIRNAME
+    out_dir = tenant_root(_PROJECT_ROOT) / _cfg.CODEX_OUTPUT_DIRNAME
     out_dir.mkdir(parents=True, exist_ok=True)
     safe_email = (email or "unknown").strip().replace("/", "_").replace("\\", "_")
     path = out_dir / f"codex-{safe_email}-sub2-callback.json"

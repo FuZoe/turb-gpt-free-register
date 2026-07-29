@@ -11,6 +11,7 @@ import requests
 
 from config import email as _email_cfg
 from core.otp_utils import extract_otp, looks_like_openai_email
+from core.tenant_context import current_tenant
 
 logger = logging.getLogger(__name__)
 
@@ -28,11 +29,13 @@ class MailNestAccount:
     project_code: str = ""
 
 
-_CONTEXT_CACHE: dict[str, MailNestAccount] = {}
+_CONTEXT_CACHE: dict[object, MailNestAccount] = {}
 
 
-def _cache_key(email: str) -> str:
-    return str(email or "").strip().lower()
+def _cache_key(email: str) -> object:
+    tenant_id = current_tenant()
+    normalized = str(email or "").strip().lower()
+    return normalized if tenant_id == "default" else (tenant_id, normalized)
 
 
 def _api_key() -> str:

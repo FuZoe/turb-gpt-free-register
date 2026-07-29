@@ -36,6 +36,11 @@ EDITABLE_FIELDS = [
         "storage": "env", "secret": True,
     },
     {
+        "key": "WEBUI_TENANT_AUTH_CODES", "file": "codex.py", "type": "str", "group": "WebUI 授权",
+        "label": "租户授权码映射", "help": "JSON 格式：{\"tenant2\":\"授权码\"}；每个租户拥有独立账号、邮箱池、任务和日志，保存后重启生效",
+        "storage": "env", "secret": True,
+    },
+    {
         "key": "WEBUI_SESSION_SECRET", "file": "codex.py", "type": "str", "group": "WebUI 授权",
         "label": "Session 签名密钥", "help": "可选，保存在 .env（WEBUI_SESSION_SECRET）；不填则从固定授权码派生，修改授权码会使已有登录失效",
         "storage": "env", "secret": True,

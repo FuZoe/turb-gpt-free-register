@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 from core import db
+from core.tenant_context import current_tenant, tenant_path
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +17,10 @@ _RETRYING_LOCK = threading.Lock()
 _STOP_REQUESTED: set[str] = set()
 _RUNNING_THREADS: dict[str, int] = {}
 _RESERVED_AT: dict[str, float] = {}
+
+
+def _retry_key(email: str) -> str:
+    return f"{current_tenant()}\0{str(email or '').strip().lower()}"
 
 
 class CodexRetryStopped(Exception):
@@ -40,12 +45,12 @@ def _clear_state_locked(key: str) -> None:
 
 def log_path(email: str) -> Path:
     safe = email.replace("/", "_").replace("\\", "_").replace(":", "_")
-    return _LOG_DIR / f"codex-retry-{safe}.log"
+    return tenant_path(Path(__file__).resolve().parent.parent, _LOG_DIR) / f"codex-retry-{safe}.log"
 
 
 def reserve(email: str) -> bool:
     """进程内防止同一账号被重复补跑。"""
-    key = (email or "").strip().lower()
+    key = _retry_key(email)
     if not key:
         return False
     with _RETRYING_LOCK:
@@ -79,19 +84,19 @@ def reserve(email: str) -> bool:
 
 
 def release(email: str) -> None:
-    key = (email or "").strip().lower()
+    key = _retry_key(email)
     with _RETRYING_LOCK:
         _clear_state_locked(key)
 
 
 def is_retrying(email: str) -> bool:
     with _RETRYING_LOCK:
-        return (email or "").strip().lower() in _RETRYING
+        return _retry_key(email) in _RETRYING
 
 
 def is_stop_requested(email: str) -> bool:
     with _RETRYING_LOCK:
-        return (email or "").strip().lower() in _STOP_REQUESTED
+        return _retry_key(email) in _STOP_REQUESTED
 
 
 def check_stop_requested(email: str) -> None:
@@ -117,7 +122,7 @@ def _async_raise(thread_id: int, exc_type: type[BaseException]) -> bool:
 
 def request_stop(email: str) -> dict:
     """请求停止单个 Codex 补跑。运行中会注入停止异常；排队中会在启动前退出。"""
-    key = (email or "").strip().lower()
+    key = _retry_key(email)
     if not key:
         return {"ok": False, "error": "email 为空", "status": 400}
     with _RETRYING_LOCK:
@@ -173,7 +178,7 @@ def run_worker(
     fh: logging.FileHandler | None = None
     root_logger = logging.getLogger()
     result: dict = {"status": "failed", "ok": False, "message": "Codex 补跑未返回结果"}
-    key = (email or "").strip().lower()
+    key = _retry_key(email)
     try:
         with _RETRYING_LOCK:
             _RUNNING_THREADS[key] = threading.get_ident()

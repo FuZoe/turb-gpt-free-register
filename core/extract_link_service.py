@@ -19,6 +19,7 @@ except Exception:  # WebUI 环境未装 curl_cffi 时使用标准库兜底
 
 from config import extract_link as cfg
 from core import db
+from core.tenant_context import current_tenant, run_for_tenant
 
 logger = logging.getLogger(__name__)
 
@@ -337,7 +338,17 @@ def enqueue_account_extract(*, account_id: int, email: str, access_token: str, t
         if not db.claim_account_extract(account_id, trigger=trigger, link_type=lt):
             _QUEUE_SLOTS.release()
             return {"accepted": False, "busy": True, "error": "该账号正在提链中"}
-        fut = _EXECUTOR.submit(_run_extract, account_id=account_id, email=email, access_token=access_token, link_type=lt, cdk=code, trigger=trigger)
+        fut = _EXECUTOR.submit(
+            run_for_tenant,
+            current_tenant(),
+            _run_extract,
+            account_id=account_id,
+            email=email,
+            access_token=access_token,
+            link_type=lt,
+            cdk=code,
+            trigger=trigger,
+        )
         return {"accepted": True, "busy": False, "future": fut, "link_type": lt}
     except Exception:
         _QUEUE_SLOTS.release()

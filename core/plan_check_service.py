@@ -12,6 +12,7 @@ from datetime import datetime
 from config import proxy as proxy_cfg
 from core import db
 from core.chatgpt_plan import check_account_plan
+from core.tenant_context import current_tenant, run_for_tenant
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +162,10 @@ def enqueue_account_plan_check(
         return {"accepted": False, "busy": True, "error": "该账号正在查询套餐"}
 
     try:
+        tenant_id = current_tenant()
         _EXECUTOR.submit(
+            run_for_tenant,
+            tenant_id,
             _run_plan_check,
             account_id=account_id,
             email=email,

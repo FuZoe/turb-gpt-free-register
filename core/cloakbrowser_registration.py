@@ -14,6 +14,7 @@ from core.account_export import save_account_data
 from core.cloakbrowser_driver import build_cloak_driver
 from core.email_provider import wait_for_otp, resolve_email_source
 from core.humanize import delay as human_delay
+from core.tenant_context import tenant_path
 
 # 复用 Roxy 注册流程里已维护好的页面操作函数。
 from core.roxy_registration import (  # noqa: F401
@@ -41,7 +42,10 @@ def _capture_cloak_failure_diagnostics(driver, batch_dir: Path | None = None) ->
         root = (
             Path(batch_dir) / "cloak-diagnostics"
             if batch_dir
-            else Path(__file__).resolve().parent.parent / "注册日志" / "cloak-diagnostics"
+            else tenant_path(
+                Path(__file__).resolve().parent.parent,
+                Path(__file__).resolve().parent.parent / "注册日志" / "cloak-diagnostics",
+            )
         )
         stamp = time.strftime("%Y%m%d-%H%M%S")
         millis = int(time.time() * 1000) % 1000

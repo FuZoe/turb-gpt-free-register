@@ -20,6 +20,7 @@ import pyotp
 
 from core.session import BrowserSession
 from core.humanize import delay as human_delay
+from core.tenant_context import tenant_path
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,10 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _ACCOUNTS_DIR = _PROJECT_ROOT / "accounts"
 _BATCH_ARCHIVE_LOCK = threading.RLock()
+
+
+def _accounts_dir() -> Path:
+    return tenant_path(_PROJECT_ROOT, _ACCOUNTS_DIR)
 
 
 def _account_material_line(email: str, row: dict | None = None) -> str:
@@ -45,10 +50,11 @@ def create_batch_archive_dir(count: int, workers: int = 1) -> Path:
     """为一次运行创建批次归档目录，例如 accounts/20260509-10个-3线程。"""
     day = datetime.now().strftime("%Y%m%d")
     base_name = f"{day}-{count}个" if workers <= 1 else f"{day}-{count}个-{workers}线程"
-    folder = _ACCOUNTS_DIR / base_name
+    accounts_dir = _accounts_dir()
+    folder = accounts_dir / base_name
     suffix = 2
     while folder.exists():
-        folder = _ACCOUNTS_DIR / f"{base_name}-{suffix}"
+        folder = accounts_dir / f"{base_name}-{suffix}"
         suffix += 1
     folder.mkdir(parents=True, exist_ok=True)
     (folder / "注册成功的邮箱.txt").write_text("", encoding="utf-8")

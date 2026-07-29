@@ -13,19 +13,23 @@ import threading
 import time
 from collections import defaultdict
 
+from core.tenant_context import current_tenant
+
 logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
 # email(lower) -> list[code]  支持同一邮箱多次验证码
-_codes: dict[str, list[str]] = defaultdict(list)
+_codes: dict[tuple[str, str], list[str]] = defaultdict(list)
 # email(lower) -> Event
-_events: dict[str, threading.Event] = {}
+_events: dict[tuple[str, str], threading.Event] = {}
 # email(lower) -> waiting meta
-_waiting: dict[str, dict] = {}
+_waiting: dict[tuple[str, str], dict] = {}
 
 
-def _norm(email: str) -> str:
-    return str(email or "").strip().lower()
+def _norm(email: str | tuple[str, str]) -> tuple[str, str]:
+    if isinstance(email, tuple) and len(email) == 2:
+        return str(email[0]), str(email[1])
+    return current_tenant(), str(email or "").strip().lower()
 
 
 def _event_for(email: str) -> threading.Event:
@@ -56,13 +60,14 @@ def clear_waiting(email: str) -> None:
 
 def list_waiting() -> list[dict]:
     with _lock:
-        return [dict(v) for v in _waiting.values()]
+        tenant_id = current_tenant()
+        return [dict(v) for key, v in _waiting.items() if key[0] == tenant_id]
 
 
 def submit_manual_otp(email: str, code: str) -> dict:
     key = _norm(email)
     code = str(code or "").strip().replace(" ", "")
-    if not key:
+    if not key[1]:
         raise ValueError("email 为空")
     if not code:
         raise ValueError("验证码为空")
@@ -91,7 +96,7 @@ def pop_manual_otp(email: str) -> str | None:
 def wait_for_manual_otp(email: str, *, timeout: int = 180, job_id: int | None = None) -> str:
     """阻塞等待手动验证码。优先吃已提交的 code，否则轮询/事件等待。"""
     key = _norm(email)
-    if not key:
+    if not key[1]:
         raise RuntimeError("手动 OTP：email 为空")
 
     # 若已有预提交验证码，直接用

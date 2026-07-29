@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from core import codex_retry_service, db
+from core.tenant_context import current_tenant, run_for_tenant
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +31,8 @@ _executor_generation = 0
 _retired_executors: list[ThreadPoolExecutor] = []
 _executor_lock = threading.RLock()
 
-_STOP_EVENTS: dict[int, threading.Event] = {}
-_ACTIVE_JOBS: set[int] = set()
+_STOP_EVENTS: dict[tuple[str, int], threading.Event] = {}
+_ACTIVE_JOBS: set[tuple[str, int]] = set()
 _STOP_LOCK = threading.Lock()
 _THREAD_CTX = threading.local()
 
@@ -40,17 +41,23 @@ class StopRequested(RuntimeError):
     """用户手动停止注册任务。"""
 
 
+def _job_key(job_id: int) -> tuple[str, int]:
+    return current_tenant(), int(job_id)
+
+
 def _activate_job(job_id: int) -> None:
     _THREAD_CTX.job_id = int(job_id)
+    key = _job_key(job_id)
     with _STOP_LOCK:
-        _STOP_EVENTS.setdefault(int(job_id), threading.Event())
-        _ACTIVE_JOBS.add(int(job_id))
+        _STOP_EVENTS.setdefault(key, threading.Event())
+        _ACTIVE_JOBS.add(key)
 
 
 def _deactivate_job(job_id: int) -> None:
+    key = _job_key(job_id)
     with _STOP_LOCK:
-        _STOP_EVENTS.pop(int(job_id), None)
-        _ACTIVE_JOBS.discard(int(job_id))
+        _STOP_EVENTS.pop(key, None)
+        _ACTIVE_JOBS.discard(key)
     try:
         delattr(_THREAD_CTX, "job_id")
     except Exception:
@@ -62,8 +69,9 @@ def is_stop_requested(job_id: int | None = None) -> bool:
         job_id = getattr(_THREAD_CTX, "job_id", None)
     if not job_id:
         return False
+    key = _job_key(job_id)
     with _STOP_LOCK:
-        ev = _STOP_EVENTS.get(int(job_id))
+        ev = _STOP_EVENTS.get(key)
         if ev and ev.is_set():
             return True
     job = db.get_job(int(job_id))
@@ -484,11 +492,12 @@ def submit_registration(count: int = 1, email_source: str | None = None, workers
     with _executor_lock:
         executor = get_executor(max_workers=workers)
         effective_workers = get_executor_workers()
+        tenant_id = current_tenant()
         jobs = []
         for _ in range(count):
             job = db.create_job(email_source=email_source)
             try:
-                executor.submit(_run_one_job, job["id"], job["log_file"])
+                executor.submit(run_for_tenant, tenant_id, _run_one_job, job["id"], job["log_file"])
             except Exception as exc:
                 db.update_job(
                     int(job["id"]),
@@ -619,10 +628,11 @@ def retry_job(job_id: int, workers: int | None = None) -> dict:
             db.update_account_codex_status(email, "retrying", None)
         with _executor_lock:
             executor = get_executor(max_workers=workers)
+            tenant_id = current_tenant()
             if action == "codex":
-                executor.submit(_run_codex_retry_job, job["id"], job["log_file"], email, int(account_id))
+                executor.submit(run_for_tenant, tenant_id, _run_codex_retry_job, job["id"], job["log_file"], email, int(account_id))
             else:
-                executor.submit(_run_one_job, job["id"], job["log_file"])
+                executor.submit(run_for_tenant, tenant_id, _run_one_job, job["id"], job["log_file"])
     except Exception as exc:
         if reserved_codex:
             codex_retry_service.release(email)
@@ -685,17 +695,18 @@ def request_stop_job(job_id: int) -> dict:
     if status in ("success", "failed", "cancelled", "stopped"):
         return {"ok": True, "message": f"任务已结束：{status}", "job_id": job_id, "state": status}
     if status in ("running", "stopping"):
+        key = _job_key(job_id)
         with _STOP_LOCK:
-            active = int(job_id) in _ACTIVE_JOBS
-            ev = _STOP_EVENTS.get(int(job_id)) if active else None
+            active = key in _ACTIVE_JOBS
+            ev = _STOP_EVENTS.get(key) if active else None
             if ev is not None:
                 ev.set()
         if not active or ev is None:
             # Web 服务重启、线程异常退出、历史残留 stopping，或之前手动停止时只创建了 stop event
             # 但没有真实线程实例：直接落为 stopped，避免永远卡在“停止中”。
             with _STOP_LOCK:
-                _STOP_EVENTS.pop(int(job_id), None)
-                _ACTIVE_JOBS.discard(int(job_id))
+                _STOP_EVENTS.pop(key, None)
+                _ACTIVE_JOBS.discard(key)
             db.update_job(
                 job_id,
                 status="stopped",

@@ -13,11 +13,16 @@ from urllib.parse import urlparse
 
 from config import proxy as proxy_cfg
 from core import db
+from core.tenant_context import current_tenant, run_for_tenant, tenant_path, tenant_root
 
 logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _OUTPUT_DIR = _PROJECT_ROOT / "codex_agent_accounts"
+
+
+def _output_dir() -> Path:
+    return tenant_path(_PROJECT_ROOT, _OUTPUT_DIR)
 
 
 def _join_sub2_url(base: str, path: str) -> str:
@@ -117,8 +122,9 @@ def _run_generate(*, account_id: int, email: str, access_token: str, trigger: st
     try:
         if not db.mark_account_codex_agent_running(account_id):
             return {"ok": False, "error": "账号已删除或 Codex Agent 状态已被重置"}
-        _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        output_path = _OUTPUT_DIR / f"codex-agent-{_safe_email_filename(email)}.json"
+        output_dir = _output_dir()
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / f"codex-agent-{_safe_email_filename(email)}.json"
         from core.codex_agent import create_codex_agent_identity
         from core.chatgpt_plan import resolve_plan_check_route
         from core.session import BrowserSession
@@ -219,7 +225,7 @@ def _run_generate(*, account_id: int, email: str, access_token: str, trigger: st
                     output = str(getattr(sub2api_cfg, "SUB2API_OUTPUT_PATH", "sub2api.json") or "sub2api.json").strip()
                     sub2api_output_path = Path(output)
                     if not sub2api_output_path.is_absolute():
-                        sub2api_output_path = _PROJECT_ROOT / sub2api_output_path
+                        sub2api_output_path = tenant_root(_PROJECT_ROOT) / sub2api_output_path
                     file_result = upsert_sub2api_account(auth_json, sub2api_output_path, proxy_key=proxy_key)
                     results.append({"mode": "file", **file_result})
                     logger.info(
@@ -304,6 +310,8 @@ def enqueue_account_codex_agent(*, account_id: int, email: str, access_token: st
             _QUEUE_SLOTS.release()
             return {"accepted": False, "busy": True, "error": "该账号正在生成 Codex Agent Token"}
         fut = _EXECUTOR.submit(
+            run_for_tenant,
+            current_tenant(),
             _run_generate,
             account_id=account_id,
             email=email,
