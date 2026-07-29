@@ -76,7 +76,7 @@ def check_stop_requested() -> None:
         raise StopRequested(f"任务 #{job_id} 已被用户手动停止")
 
 
-def _append_job_log(job_id: int, message: str) -> None:
+def _append_job_log(job_id: int, message: str, source: str = "manual-stop") -> None:
     try:
         job = db.get_job(job_id)
         log_file = job.get("log_file") if job else None
@@ -85,7 +85,7 @@ def _append_job_log(job_id: int, message: str) -> None:
         Path(log_file).parent.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().strftime("%H:%M:%S")
         with Path(log_file).open("a", encoding="utf-8") as f:
-            f.write(f"{ts} [WARNING] [manual-stop] {message}\n")
+            f.write(f"{ts} [WARNING] [{source}] {message}\n")
     except Exception:
         pass
 
@@ -189,6 +189,38 @@ def _disable_job_email(email: str | None, reason: str) -> bool:
     except Exception:
         logger.exception("[Service] 自动停用邮箱失败: %s", email)
         return False
+
+
+def recover_interrupted_jobs() -> int:
+    """Web 服务启动时回收上一个进程遗留的活跃任务。
+
+    线程池只存在于进程内；服务一旦重启，持久化为 pending/running/stopping
+    的记录已经没有对应 Future 或工作线程。把它们落为 stopped，既避免前端
+    永久显示运行，也允许用户从原任务创建一次可追踪的重试。
+    """
+    active_states = {"pending", "running", "stopping"}
+    stale_jobs = [
+        job for job in db.list_jobs(limit=100_000)
+        if str(job.get("status") or "") in active_states
+    ]
+    if not stale_jobs:
+        return 0
+
+    now_iso = datetime.now().isoformat(timespec="seconds")
+    for job in stale_jobs:
+        job_id = int(job.get("id") or 0)
+        old_status = str(job.get("status") or "unknown")
+        reason = f"服务进程重启，原任务实例已终止（原状态：{old_status}）"
+        db.update_job(
+            job_id,
+            status="stopped",
+            error=reason,
+            completed_at=now_iso,
+        )
+        _release_unconsumed_job_email(str(job.get("email") or "").strip() or None, reason)
+        _append_job_log(job_id, reason, source="startup-recovery")
+        logger.warning("[Service] 启动时回收孤儿任务 #%s：%s -> stopped", job_id, old_status)
+    return len(stale_jobs)
 
 
 def _normalize_workers(max_workers: int | None) -> int:

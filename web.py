@@ -93,6 +93,11 @@ def main() -> None:
         logger.error(str(exc))
         raise SystemExit(2) from exc
 
+    from core.registration_service import recover_interrupted_jobs
+    recovered_jobs = recover_interrupted_jobs()
+    if recovered_jobs:
+        logger.warning("启动时已回收 %s 个上次进程遗留任务", recovered_jobs)
+
     app = create_app(auth_code=args.auth_code)
     url = f"http://{'127.0.0.1' if args.host in ('0.0.0.0', '::') else args.host}:{args.port}"
     logger.info(f"WebUI 已启动：{url}")
