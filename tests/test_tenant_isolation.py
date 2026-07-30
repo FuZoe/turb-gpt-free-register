@@ -3,7 +3,7 @@ from flask import Flask, jsonify
 from core import db
 from core import registration_service as registration_svc
 from core.tenant_context import current_tenant, tenant_scope
-from webui.auth import init_auth, register_auth_routes
+from webui.auth import can_manage_shared_proxies, init_auth, register_auth_routes
 
 
 def test_json_storage_is_isolated_by_tenant(tmp_path, monkeypatch):
@@ -61,49 +61,19 @@ def test_tenant_context_is_reset_after_request(monkeypatch):
     assert current_tenant() == "default"
 
 
-def test_friend_tenant_shares_only_proxy_manager_context(monkeypatch):
-    monkeypatch.setenv("WEBUI_TENANT_AUTH_CODES", '{"tenant2":"friend-code"}')
+def test_friend_tenant_can_manage_shared_proxies_without_losing_tenant_context(monkeypatch):
     monkeypatch.delenv("WEBUI_PROXY_MANAGER_TENANTS", raising=False)
-    app = Flask(__name__)
-    app.config["TESTING"] = True
-    init_auth(app, auth_code="owner-code")
-    register_auth_routes(app)
-
-    @app.get("/tenant-probe")
-    def tenant_probe():
-        return jsonify({"tenant": current_tenant()})
-
-    @app.get("/api/proxy-manager")
-    @app.post("/api/proxy-manager/save")
-    @app.post("/api/proxy-manager/test")
-    @app.post("/api/proxy-manager/registration-route")
-    def proxy_manager_probe():
-        return jsonify({"tenant": current_tenant()})
-
-    client = app.test_client()
-    headers = {"X-Auth-Code": "friend-code"}
-    assert client.get("/tenant-probe", headers=headers).get_json()["tenant"] == "tenant2"
-    assert client.get("/api/proxy-manager", headers=headers).get_json()["tenant"] == "default"
-    assert client.post("/api/proxy-manager/save", headers=headers).get_json()["tenant"] == "default"
-    assert client.post("/api/proxy-manager/test", headers=headers).get_json()["tenant"] == "default"
-    assert client.post("/api/proxy-manager/registration-route", headers=headers).get_json()["tenant"] == "default"
-    assert current_tenant() == "default"
+    assert can_manage_shared_proxies("default") is True
+    assert can_manage_shared_proxies("tenant2") is True
+    assert can_manage_shared_proxies("team-a") is False
 
 
-def test_other_tenant_cannot_enter_shared_proxy_context(monkeypatch):
-    monkeypatch.setenv("WEBUI_TENANT_AUTH_CODES", '{"team-a":"team-code"}')
-    monkeypatch.setenv("WEBUI_PROXY_MANAGER_TENANTS", "tenant2")
-    app = Flask(__name__)
-    app.config["TESTING"] = True
-    init_auth(app, auth_code="owner-code")
-    register_auth_routes(app)
+def test_shared_proxy_allowlist_can_be_overridden(monkeypatch):
+    monkeypatch.setenv("WEBUI_PROXY_MANAGER_TENANTS", "friend-a,friend-b")
+    assert can_manage_shared_proxies("friend-a") is True
+    assert can_manage_shared_proxies("friend-b") is True
+    assert can_manage_shared_proxies("tenant2") is False
 
-    @app.get("/api/proxy-manager")
-    def proxy_manager_probe():
-        return jsonify({"tenant": current_tenant()})
-
-    response = app.test_client().get("/api/proxy-manager", headers={"X-Auth-Code": "team-code"})
-    assert response.get_json()["tenant"] == "team-a"
 
 
 def test_registration_worker_keeps_submitting_tenant(monkeypatch):

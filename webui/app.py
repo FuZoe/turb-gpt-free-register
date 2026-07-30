@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 from flask import Flask, Response, jsonify, render_template, request
 
 from core import codex_retry_service, db, plan_check_service, extract_link_service, codex_agent_service
-from webui.auth import configured_tenants, init_auth, register_auth_routes
+from webui.auth import can_manage_shared_proxies, configured_tenants, init_auth, register_auth_routes
 from core import registration_service as svc
 from core.tenant_context import current_tenant, tenant_scope
 from webui import config_editor
@@ -2256,6 +2256,80 @@ def create_app(auth_code: str | None = None) -> Flask:
             return jsonify(result)
         except Exception as exc:
             logger.exception("获取 Roxy 团队/工作区失败")
+            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 500
+
+    # ----------------------------------------------------------
+    # 代理管理
+    # ----------------------------------------------------------
+    @app.get("/api/proxy-manager")
+    def api_proxy_manager_get():
+        if not can_manage_shared_proxies(current_tenant()):
+            return jsonify({"ok": False, "error": "租户账号不能管理共享代理"}), 403
+        try:
+            from webui.mihomo_proxy_pool import read_all_proxy_pools, registration_route_state
+            return jsonify({
+                "ok": True,
+                "pools": read_all_proxy_pools(),
+                "registration_route": registration_route_state(),
+            })
+        except Exception as exc:
+            logger.exception("读取 Mihomo 代理池失败")
+            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 500
+
+    @app.post("/api/proxy-manager/save")
+    def api_proxy_manager_save():
+        if not can_manage_shared_proxies(current_tenant()):
+            return jsonify({"ok": False, "error": "租户账号不能管理共享代理"}), 403
+        data = request.get_json(silent=True) or {}
+        pool_key = str(data.get("pool") or "").strip()
+        proxies = data.get("proxies")
+        if isinstance(proxies, str):
+            proxies = [line.strip() for line in proxies.splitlines() if line.strip()]
+        if not isinstance(proxies, list):
+            return jsonify({"ok": False, "error": "proxies 必须是代理 URL 列表"}), 400
+        try:
+            from webui.mihomo_proxy_pool import update_proxy_pool
+            result = update_proxy_pool(pool_key, proxies)
+            return jsonify({"ok": True, **result})
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except Exception as exc:
+            logger.exception("保存 Mihomo 代理池失败")
+            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 500
+
+    @app.post("/api/proxy-manager/test")
+    def api_proxy_manager_test():
+        if not can_manage_shared_proxies(current_tenant()):
+            return jsonify({"ok": False, "error": "租户账号不能检测共享代理"}), 403
+        data = request.get_json(silent=True) or {}
+        pool_key = str(data.get("pool") or "").strip()
+        try:
+            from webui.mihomo_proxy_pool import test_proxy_pool
+            result = test_proxy_pool(
+                pool_key,
+                timeout_ms=int(data.get("timeout_ms") or 8000),
+            )
+            return jsonify({"ok": True, **result})
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except Exception as exc:
+            logger.exception("检测 Mihomo 代理池失败")
+            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 500
+
+    @app.post("/api/proxy-manager/registration-route")
+    def api_proxy_manager_registration_route():
+        if not can_manage_shared_proxies(current_tenant()):
+            return jsonify({"ok": False, "error": "租户账号不能切换注册线路"}), 403
+        data = request.get_json(silent=True) or {}
+        pool_key = str(data.get("pool") or "").strip()
+        try:
+            from webui.mihomo_proxy_pool import select_registration_pool
+            route = select_registration_pool(pool_key)
+            return jsonify({"ok": True, "registration_route": route})
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except Exception as exc:
+            logger.exception("切换注册线路失败")
             return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 500
 
     # ----------------------------------------------------------

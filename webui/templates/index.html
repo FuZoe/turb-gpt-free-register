@@ -95,6 +95,48 @@
       padding: 8px 12px; font: inherit; margin-top: 6px;
     }
     textarea { min-height: 120px; font-family: ui-monospace, Consolas, monospace; font-size: 12px; resize: vertical; }
+    .proxy-manager-grid { display: grid; gap: 14px; }
+    .proxy-pool-tabs { display: flex; gap: 8px; flex-wrap: wrap; }
+    .proxy-pool-tabs button {
+      min-height: 38px; padding: 0 14px; border: 1px solid var(--line); border-radius: 8px;
+      background: #fff; color: #475467; font-weight: 800; cursor: pointer;
+    }
+    .proxy-pool-tabs button.active { color: #1d4ed8; border-color: #8eb0f8; background: #eef4ff; }
+    .proxy-pool-tabs .config-count { margin-left: 5px; }
+    .proxy-editor-meta {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+      padding: 12px 14px; border: 1px solid #dbe6f2; border-radius: 9px; background: #f8fbff;
+    }
+    .registration-route-box {
+      display: grid; grid-template-columns: minmax(260px, 1fr) minmax(240px, 420px) auto;
+      gap: 12px; align-items: end; padding: 14px; border: 1px solid #c8d8ee;
+      border-radius: 10px; background: linear-gradient(180deg, #f8fbff, #f2f7ff);
+    }
+    .registration-route-box label { margin: 0; }
+    .registration-route-current { margin-top: 5px; color: #475467; font-size: 12px; }
+    @media (max-width: 800px) {
+      .registration-route-box { grid-template-columns: 1fr; }
+      .registration-route-box .btn { width: 100%; }
+    }
+    .proxy-editor-meta strong { display: block; margin-bottom: 3px; }
+    .proxy-editor-meta .route { color: #1d4ed8; font-weight: 800; }
+    #proxyEditor {
+      min-height: 52vh; max-height: 72vh; margin-top: 0; padding: 14px;
+      border-color: #bdcce0; line-height: 1.55; font-size: 13px; white-space: pre;
+    }
+    .proxy-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    .proxy-actions .buttons { justify-content: flex-end; }
+    .proxy-summary { display: flex; gap: 8px; flex-wrap: wrap; }
+    .proxy-summary .pill { min-width: auto; }
+    .proxy-test-table .col-index { width: 72px; }
+    .proxy-test-table .col-status { width: 100px; }
+    .proxy-test-table .col-delay { width: 120px; }
+    .proxy-test-table .col-proxy-name { width: 280px; }
+    @media (max-width: 700px) {
+      #proxyEditor { min-height: 58vh; font-size: 12px; }
+      .proxy-actions { align-items: stretch; }
+      .proxy-actions .buttons, .proxy-actions .buttons .btn { width: 100%; }
+    }
     .row { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; }
     .row > * { flex: 1; min-width: 160px; }
     .row label.fld { margin-bottom: 0; }
@@ -404,6 +446,7 @@
     <button data-tab="accounts">账号</button>
     <button data-tab="codex">Codex 授权</button>
     <button data-tab="outlook">邮箱池</button>
+    <button data-tab="proxies">代理管理</button>
     <button data-tab="config">配置</button>
   </div>
 </nav>
@@ -657,6 +700,61 @@
   </div>
 
   <!-- ============ 配置 ============ -->
+  <div id="tab-proxies" class="hidden">
+    <section class="card">
+      <div class="head">
+        <h2>代理管理</h2>
+        <p>管理 Mihomo 的真实上游代理。保存前会校验 URL 和完整配置，失败时自动恢复备份；注册机仍通过本地转发端口使用代理。</p>
+      </div>
+      <div class="body proxy-manager-grid">
+        <div id="proxyPoolTabs" class="proxy-pool-tabs"></div>
+        <div id="proxyManagerBanner" class="banner info">正在读取代理池...</div>
+        <div class="registration-route-box">
+          <div>
+            <strong>注册线路</strong>
+            <div class="hint">注册机只连接所选国家池的本地入口，Mihomo 在池内按 round-robin 轮询大量代理。</div>
+            <div id="registrationRouteCurrent" class="registration-route-current">正在读取当前线路...</div>
+          </div>
+          <label class="fld">选择国家代理池
+            <select id="registrationRouteSelect"></select>
+          </label>
+          <button class="btn primary" id="btnSaveRegistrationRoute">应用注册线路</button>
+        </div>
+        <div id="proxyPoolMeta" class="proxy-editor-meta"></div>
+        <textarea id="proxyEditor" spellcheck="false" autocomplete="off" placeholder="每行一个代理 URL，例如：socks5://user:password@host:port"></textarea>
+        <div class="proxy-actions">
+          <div class="proxy-summary">
+            <span class="pill status-pending" id="proxyLineCount">0 条</span>
+            <span class="muted" id="proxyDirtyHint">尚未修改</span>
+          </div>
+          <div class="buttons">
+            <button class="btn" id="btnReloadProxyPool">放弃修改并重新读取</button>
+            <button class="btn good" id="btnTestProxyPool">检测已保存代理</button>
+            <button class="btn primary" id="btnSaveProxyPool">保存并应用</button>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section class="card">
+      <div class="toolbar">
+        <div>
+          <h2>检测结果</h2>
+          <p class="muted" id="proxyTestSummary" style="font-size:12px;margin-top:4px;">尚未检测</p>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="proxy-test-table">
+          <colgroup>
+            <col class="col-index"><col class="col-proxy-name"><col class="col-status">
+            <col class="col-delay"><col>
+          </colgroup>
+          <thead><tr><th>#</th><th>代理名称</th><th>状态</th><th>延迟</th><th class="wrap">错误</th></tr></thead>
+          <tbody id="proxyTestBody"><tr><td colspan="5" class="muted">尚未检测</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
   <div id="tab-config" class="hidden">
     <section class="card">
       <div class="head"><h2>运行配置</h2><p>仅开放运行时安全的开关与数值。协议级常量（client_id / sentinel 版本）不在此处，避免误改废号。</p></div>
@@ -828,7 +926,7 @@ async function loadRuntimeResources() {
 
 // ---------- Tab 切换 ----------
 function activateTab(tab, persist=true) {
-  const allowed = ['register','accounts','codex','outlook','config'];
+  const allowed = ['register','accounts','codex','outlook','proxies','config'];
   if (!allowed.includes(tab)) tab = 'register';
   $$('nav button').forEach(x => x.classList.toggle('active', x.dataset.tab === tab));
   allowed.forEach(t => $('#tab-'+t).classList.toggle('hidden', t !== tab));
@@ -836,6 +934,7 @@ function activateTab(tab, persist=true) {
   if (tab === 'accounts') loadAccounts();
   if (tab === 'codex') loadCodex();
   if (tab === 'outlook') loadOutlook();
+  if (tab === 'proxies') loadProxyManager();
   if (tab === 'config') loadConfig();
   if (tab === 'register') refreshJobs();
 }
@@ -2789,6 +2888,218 @@ $('#codexBody').addEventListener('click', async (e) => {
       showToast('已重置');
       loadCodex();
     } catch(err) { showToast('重置失败: ' + err.message); }
+  }
+});
+
+// ---------- 代理管理 ----------
+let PROXY_POOLS = [];
+let PROXY_ACTIVE_POOL = 'jp';
+let PROXY_DIRTY = false;
+let PROXY_REGISTRATION_ROUTE = null;
+
+function currentProxyPool() {
+  return PROXY_POOLS.find(x => x.key === PROXY_ACTIVE_POOL) || PROXY_POOLS[0] || null;
+}
+
+function proxyEditorLines() {
+  return ($('#proxyEditor').value || '').split('\n').map(x => x.trim()).filter(Boolean);
+}
+
+function updateProxyEditorCount() {
+  const pool = currentProxyPool();
+  const count = proxyEditorLines().length;
+  $('#proxyLineCount').textContent = `${count} 条`;
+  $('#proxyLineCount').className = `pill ${pool && count >= Number(pool.min_count) && count <= Number(pool.max_count) ? 'status-success' : 'status-failed'}`;
+  $('#proxyDirtyHint').textContent = PROXY_DIRTY ? '有未保存修改' : '已与服务器同步';
+  $('#proxyDirtyHint').style.color = PROXY_DIRTY ? 'var(--amber)' : 'var(--muted)';
+}
+
+function renderProxyPoolTabs() {
+  $('#proxyPoolTabs').innerHTML = PROXY_POOLS.map(pool => `
+    <button type="button" data-proxy-pool="${esc(pool.key)}" class="${pool.key === PROXY_ACTIVE_POOL ? 'active' : ''}">
+      ${esc(pool.label)} <span class="config-count">${fmt(pool.count)}</span>
+    </button>
+  `).join('');
+}
+
+function renderRegistrationRoute() {
+  const route = PROXY_REGISTRATION_ROUTE || {};
+  const select = $('#registrationRouteSelect');
+  select.innerHTML = `
+    <option value="">请选择注册线路</option>
+    ${PROXY_POOLS.map(pool => `
+      <option value="${esc(pool.key)}" ${Number(pool.count) <= 0 ? 'disabled' : ''} ${route.pool === pool.key ? 'selected' : ''}>
+        ${esc(pool.label)}（${fmt(pool.count)} 条）${Number(pool.count) <= 0 ? '－请先添加代理' : ''}
+      </option>
+    `).join('')}
+  `;
+  const detail = route.local_entry ? ` · ${esc(route.local_entry)}` : '';
+  $('#registrationRouteCurrent').innerHTML = `当前：<b>${esc(route.label || '未配置')}</b>${detail}`;
+  $('#registrationRouteCurrent').style.color = route.legacy ? 'var(--amber)' : 'var(--green)';
+}
+
+function renderActiveProxyPool() {
+  const pool = currentProxyPool();
+  if (!pool) return;
+  PROXY_ACTIVE_POOL = pool.key;
+  renderProxyPoolTabs();
+  renderRegistrationRoute();
+  $('#proxyPoolMeta').innerHTML = `
+    <div>
+      <strong>${esc(pool.label)}</strong>
+      <span class="muted">${esc(pool.description)}</span>
+    </div>
+    <div>本地入口：<span class="mono route">${esc(pool.local_entry)}</span></div>
+  `;
+  $('#proxyEditor').value = (pool.proxies || []).join('\n');
+  PROXY_DIRTY = false;
+  updateProxyEditorCount();
+  $('#proxyManagerBanner').className = 'banner info';
+  $('#proxyManagerBanner').innerHTML = `已读取 <b>${fmt(pool.count)}</b> 条代理。支持 <span class="mono">socks5://</span> 和 <span class="mono">http://</span>，每行一条。`;
+  $('#proxyTestSummary').textContent = '尚未检测';
+  $('#proxyTestBody').innerHTML = '<tr><td colspan="5" class="muted">尚未检测</td></tr>';
+}
+
+async function loadProxyManager() {
+  const banner = $('#proxyManagerBanner');
+  banner.className = 'banner info';
+  banner.textContent = '正在读取 Mihomo 代理池...';
+  try {
+    const response = await api('/api/proxy-manager');
+    PROXY_POOLS = response.pools || [];
+    PROXY_REGISTRATION_ROUTE = response.registration_route || null;
+    if (!PROXY_POOLS.some(x => x.key === PROXY_ACTIVE_POOL)) {
+      PROXY_ACTIVE_POOL = (PROXY_POOLS[0] || {}).key || 'general';
+    }
+    renderActiveProxyPool();
+  } catch(e) {
+    banner.className = 'banner warn';
+    banner.textContent = `读取失败：${e.message}`;
+  }
+}
+
+$('#proxyPoolTabs').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-proxy-pool]');
+  if (!button || button.dataset.proxyPool === PROXY_ACTIVE_POOL) return;
+  if (PROXY_DIRTY && !confirm('当前代理列表有未保存修改，确定切换并放弃吗？')) return;
+  PROXY_ACTIVE_POOL = button.dataset.proxyPool;
+  renderActiveProxyPool();
+});
+
+$('#btnSaveRegistrationRoute').addEventListener('click', async () => {
+  const poolKey = $('#registrationRouteSelect').value;
+  const pool = PROXY_POOLS.find(x => x.key === poolKey);
+  if (!pool) {
+    showToast('请选择一个已有代理的国家池');
+    return;
+  }
+  if (!confirm(`确定把注册线路切换为“${pool.label}”吗？新注册任务将通过 ${pool.local_entry} 使用该池内代理。`)) return;
+  const button = $('#btnSaveRegistrationRoute');
+  button.disabled = true;
+  try {
+    const response = await api('/api/proxy-manager/registration-route', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({pool: pool.key}),
+    });
+    PROXY_REGISTRATION_ROUTE = response.registration_route || null;
+    renderRegistrationRoute();
+    showToast(`注册线路已切换为 ${pool.label}`);
+  } catch(e) {
+    showToast(`切换失败：${e.message}`);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$('#proxyEditor').addEventListener('input', () => {
+  PROXY_DIRTY = true;
+  updateProxyEditorCount();
+});
+
+$('#btnReloadProxyPool').addEventListener('click', async () => {
+  if (PROXY_DIRTY && !confirm('确定放弃当前未保存的修改吗？')) return;
+  await loadProxyManager();
+});
+
+$('#btnSaveProxyPool').addEventListener('click', async () => {
+  const pool = currentProxyPool();
+  const proxies = proxyEditorLines();
+  if (!pool) return;
+  const min = Number(pool.min_count), max = Number(pool.max_count);
+  if (proxies.length < min || proxies.length > max) {
+    showToast(min === max ? `该代理池必须正好 ${min} 条` : `该代理池允许 ${min}–${max} 条`);
+    return;
+  }
+  if (!confirm(`确定保存“${pool.label}”的 ${proxies.length} 条代理并立即热加载 Mihomo 吗？`)) return;
+  const button = $('#btnSaveProxyPool');
+  button.disabled = true;
+  $('#proxyManagerBanner').className = 'banner info';
+  $('#proxyManagerBanner').textContent = '正在校验、备份并热加载 Mihomo...';
+  try {
+    const response = await api('/api/proxy-manager/save', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({pool: pool.key, proxies}),
+    });
+    PROXY_DIRTY = false;
+    $('#proxyManagerBanner').className = 'banner info';
+    $('#proxyManagerBanner').innerHTML = `✅ 已保存并应用 <b>${fmt(response.count)}</b> 条代理，Mihomo 热加载成功。`;
+    showToast('代理池已保存并生效');
+    await loadProxyManager();
+  } catch(e) {
+    $('#proxyManagerBanner').className = 'banner warn';
+    $('#proxyManagerBanner').textContent = `保存失败，原配置已保留：${e.message}`;
+    showToast('代理池保存失败');
+  } finally {
+    button.disabled = false;
+  }
+});
+
+function renderProxyTestResults(response) {
+  const avg = response.average_delay == null ? '-' : `${fmt(response.average_delay)} ms`;
+  $('#proxyTestSummary').innerHTML = `
+    共 ${fmt(response.count)} 条 ·
+    <span style="color:var(--green);font-weight:800;">成功 ${fmt(response.success)}</span> ·
+    <span style="color:${response.failed ? 'var(--red)' : 'var(--green)'};font-weight:800;">失败 ${fmt(response.failed)}</span> ·
+    平均延迟 ${avg}
+  `;
+  const rows = response.results || [];
+  $('#proxyTestBody').innerHTML = rows.length ? rows.map(item => `
+    <tr>
+      <td>${fmt(item.index)}</td>
+      <td class="mono">${esc(item.name)}</td>
+      <td><span class="pill ${item.ok ? 'status-success' : 'status-failed'}">${item.ok ? '可用' : '失败'}</span></td>
+      <td>${item.delay == null ? '-' : `${fmt(item.delay)} ms`}</td>
+      <td class="wrap">${esc(item.error || '')}</td>
+    </tr>
+  `).join('') : '<tr><td colspan="5" class="muted">没有检测结果</td></tr>';
+}
+
+$('#btnTestProxyPool').addEventListener('click', async () => {
+  const pool = currentProxyPool();
+  if (!pool) return;
+  if (PROXY_DIRTY) {
+    showToast('请先保存修改，再检测已应用的代理');
+    return;
+  }
+  const button = $('#btnTestProxyPool');
+  button.disabled = true;
+  $('#proxyTestSummary').textContent = `正在并发检测 ${pool.count} 条代理，请稍候...`;
+  $('#proxyTestBody').innerHTML = '<tr><td colspan="5" class="muted">检测进行中...</td></tr>';
+  try {
+    const response = await api('/api/proxy-manager/test', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({pool: pool.key, timeout_ms: 8000}),
+    });
+    renderProxyTestResults(response);
+    showToast(`检测完成：成功 ${response.success}，失败 ${response.failed}`);
+  } catch(e) {
+    $('#proxyTestSummary').textContent = `检测失败：${e.message}`;
+    $('#proxyTestBody').innerHTML = `<tr><td colspan="5" class="muted">${esc(e.message)}</td></tr>`;
+  } finally {
+    button.disabled = false;
   }
 });
 
