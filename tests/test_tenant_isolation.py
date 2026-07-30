@@ -61,6 +61,51 @@ def test_tenant_context_is_reset_after_request(monkeypatch):
     assert current_tenant() == "default"
 
 
+def test_friend_tenant_shares_only_proxy_manager_context(monkeypatch):
+    monkeypatch.setenv("WEBUI_TENANT_AUTH_CODES", '{"tenant2":"friend-code"}')
+    monkeypatch.delenv("WEBUI_PROXY_MANAGER_TENANTS", raising=False)
+    app = Flask(__name__)
+    app.config["TESTING"] = True
+    init_auth(app, auth_code="owner-code")
+    register_auth_routes(app)
+
+    @app.get("/tenant-probe")
+    def tenant_probe():
+        return jsonify({"tenant": current_tenant()})
+
+    @app.get("/api/proxy-manager")
+    @app.post("/api/proxy-manager/save")
+    @app.post("/api/proxy-manager/test")
+    @app.post("/api/proxy-manager/registration-route")
+    def proxy_manager_probe():
+        return jsonify({"tenant": current_tenant()})
+
+    client = app.test_client()
+    headers = {"X-Auth-Code": "friend-code"}
+    assert client.get("/tenant-probe", headers=headers).get_json()["tenant"] == "tenant2"
+    assert client.get("/api/proxy-manager", headers=headers).get_json()["tenant"] == "default"
+    assert client.post("/api/proxy-manager/save", headers=headers).get_json()["tenant"] == "default"
+    assert client.post("/api/proxy-manager/test", headers=headers).get_json()["tenant"] == "default"
+    assert client.post("/api/proxy-manager/registration-route", headers=headers).get_json()["tenant"] == "default"
+    assert current_tenant() == "default"
+
+
+def test_other_tenant_cannot_enter_shared_proxy_context(monkeypatch):
+    monkeypatch.setenv("WEBUI_TENANT_AUTH_CODES", '{"team-a":"team-code"}')
+    monkeypatch.setenv("WEBUI_PROXY_MANAGER_TENANTS", "tenant2")
+    app = Flask(__name__)
+    app.config["TESTING"] = True
+    init_auth(app, auth_code="owner-code")
+    register_auth_routes(app)
+
+    @app.get("/api/proxy-manager")
+    def proxy_manager_probe():
+        return jsonify({"tenant": current_tenant()})
+
+    response = app.test_client().get("/api/proxy-manager", headers={"X-Auth-Code": "team-code"})
+    assert response.get_json()["tenant"] == "team-a"
+
+
 def test_registration_worker_keeps_submitting_tenant(monkeypatch):
     seen = []
 
