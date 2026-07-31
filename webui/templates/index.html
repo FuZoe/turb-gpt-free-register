@@ -315,8 +315,8 @@
       width: 100%; max-width: 100%; min-width: 0;
       max-height: 320px; overflow: auto; line-height: 1.5;
     }
-    #logPanel, #retryLogPanel, #qrPanel, #secretPanel, #agentTokenPanel { min-width: 0; max-width: 100%; overflow-x: hidden; }
-    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #qrPanel:not(.hidden), #secretPanel:not(.hidden), #agentTokenPanel:not(.hidden) {
+    #logPanel, #retryLogPanel, #qrPanel, #secretPanel, #agentTokenPanel, #autoTaskPanel { min-width: 0; max-width: 100%; overflow-x: hidden; }
+    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #qrPanel:not(.hidden), #secretPanel:not(.hidden), #agentTokenPanel:not(.hidden), #autoTaskPanel:not(.hidden) {
       position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
       z-index: 1000; display: block; width: min(1100px, calc(100vw - 48px));
       max-height: min(760px, calc(100vh - 48px)); overflow: hidden;
@@ -326,8 +326,9 @@
     #qrPanel:not(.hidden) { width: min(520px, calc(100vw - 48px)); text-align: center; }
     #secretPanel:not(.hidden) { width: min(560px, calc(100vw - 48px)); }
     #agentTokenPanel:not(.hidden) { width: min(760px, calc(100vw - 48px)); }
-    #logPanel h3, #retryLogPanel h3, #qrPanel h3, #secretPanel h3, #agentTokenPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
-    #logPanel h3 .btn, #retryLogPanel h3 .btn, #qrPanel h3 .btn, #secretPanel h3 .btn, #agentTokenPanel h3 .btn { margin-left:auto; float:none !important; }
+    #autoTaskPanel:not(.hidden) { width: min(920px, calc(100vw - 32px)); max-height: min(820px, calc(100vh - 32px)); overflow:auto; }
+    #logPanel h3, #retryLogPanel h3, #qrPanel h3, #secretPanel h3, #agentTokenPanel h3, #autoTaskPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+    #logPanel h3 .btn, #retryLogPanel h3 .btn, #qrPanel h3 .btn, #secretPanel h3 .btn, #agentTokenPanel h3 .btn, #autoTaskPanel h3 .btn { margin-left:auto; float:none !important; }
     #logPanel .log, #retryLogPanel .log { max-height: calc(min(760px, calc(100vh - 48px)) - 74px); margin-top:0; }
     #qrPanel img { display:block; max-width:min(360px, calc(100vw - 96px)); max-height:420px; margin:12px auto; border:1px solid var(--line); border-radius:10px; background:#fff; }
     #qrPanel .qr-link { display:block; word-break:break-all; white-space:normal; font-size:12px; color:var(--muted); margin-top:8px; }
@@ -337,6 +338,19 @@
     .secret-value-row label { flex:1; margin:0; }
     .secret-value-row input { font-family:ui-monospace,Consolas,monospace; }
     #agentTokenValue { min-height:180px; max-height:360px; font-family:ui-monospace,Consolas,monospace; }
+    .auto-task-options { display:flex; gap:8px; flex-wrap:wrap; padding:10px 0 14px; border-bottom:1px solid var(--line); }
+    .auto-task-option { display:inline-flex; align-items:center; gap:7px; min-height:34px; padding:0 12px; border:1px solid var(--line); border-radius:6px; background:#fff; font-size:13px; font-weight:800; cursor:pointer; }
+    .auto-task-option:has(input:checked) { border-color:var(--blue); background:#eef4ff; color:#1d4ed8; }
+    .auto-task-option input { width:auto; min-height:auto; margin:0; }
+    .auto-task-toolbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:12px 0; }
+    .auto-task-toolbar .search { flex:1 1 300px; min-width:220px; }
+    .auto-task-toolbar .search input { margin:0; }
+    .auto-task-table { table-layout:fixed; min-width:620px; }
+    .auto-task-table .col-check { width:44px; }
+    .auto-task-table .col-id { width:70px; }
+    .auto-task-table .col-status { width:150px; }
+    .auto-task-table td { white-space:normal; overflow-wrap:anywhere; }
+    .auto-task-pager { display:flex; align-items:center; justify-content:flex-end; gap:8px; padding-top:12px; }
     .hidden { display: none !important; }
     #toast {
       position: fixed; right: 18px; bottom: 18px; padding: 10px 14px; border-radius: 8px;
@@ -566,7 +580,7 @@
           </div>
           <div class="btn-group">
             <span class="btn-group-title">自动任务</span>
-            <button class="btn good" id="btnCreateSelected2FA" disabled title="为选中且尚未启用 2FA 的账号创建排队任务">创建2FA</button>
+            <button class="btn good" id="btnOpenAutoTask" title="选择任务类型和待处理账号后统一加入队列">创建自动任务</button>
           </div>
           <div class="btn-group">
             <span class="btn-group-title">Codex</span>
@@ -788,6 +802,32 @@
 </main>
 
 <div id="toast"></div>
+<div id="autoTaskPanel" class="body hidden">
+  <h3>创建自动任务 <button class="btn" id="btnCloseAutoTask">关闭</button></h3>
+  <div class="auto-task-options" role="radiogroup" aria-label="任务类型">
+    <label class="auto-task-option"><input type="radio" name="autoTaskMode" value="twofa" checked> 创建2FA</label>
+    <label class="auto-task-option"><input type="radio" name="autoTaskMode" value="password"> 创建密码</label>
+    <label class="auto-task-option"><input type="radio" name="autoTaskMode" value="codex"> 补跑Codex</label>
+  </div>
+  <div class="auto-task-toolbar">
+    <div class="search"><input id="qAutoTaskAccounts" placeholder="搜索候选账号"></div>
+    <span class="muted" id="autoTaskSelectedHint">已选 0</span>
+    <button class="btn" id="btnSelectAutoTaskPage">全选当前页</button>
+    <button class="btn primary" id="btnSubmitAutoTask" disabled>创建任务</button>
+  </div>
+  <div class="table-wrap">
+    <table class="auto-task-table">
+      <colgroup><col class="col-check"><col class="col-id"><col><col class="col-status"></colgroup>
+      <thead><tr><th></th><th>ID</th><th>邮箱</th><th>状态</th></tr></thead>
+      <tbody id="autoTaskAccountsBody"><tr><td colspan="4" class="muted">加载中…</td></tr></tbody>
+    </table>
+  </div>
+  <div class="auto-task-pager">
+    <button class="btn" id="btnAutoTaskPrev">上一页</button>
+    <span class="muted" id="autoTaskPageInfo">第 1 / 1 页</span>
+    <button class="btn" id="btnAutoTaskNext">下一页</button>
+  </div>
+</div>
 <div id="qrPanel" class="body hidden">
   <h3>支付二维码 <button class="btn" onclick="closeQrModal()">关闭</button></h3>
   <img id="qrImage" alt="支付二维码">
@@ -824,6 +864,14 @@ let SHOW_ARCHIVED_ACCOUNTS = false;
 let SHOW_PLUS_ACCOUNTS_ONLY = false;
 const ACCOUNT_SELECTED = new Set();
 const OUTLOOK_SELECTED = new Set();
+let AUTO_TASK_MODE = 'twofa';
+let AUTO_TASK_ACCOUNTS = [];
+let AUTO_TASK_TOTAL = 0;
+let AUTO_TASK_PAGE = 1;
+const AUTO_TASK_PAGE_SIZE = 20;
+const AUTO_TASK_SELECTED = new Set();
+let autoTaskLoading = false;
+let autoTaskTimer = null;
 let JOBS = [];
 let JOBS_TOTAL = 0;
 let JOB_STATUS_COUNTS = {};
@@ -1090,7 +1138,7 @@ async function refreshJobs() {
 
 let modalScrollY = 0;
 function updateModalScrollLock() {
-  const opened = !$('#logPanel').classList.contains('hidden') || !$('#retryLogPanel').classList.contains('hidden') || !$('#qrPanel').classList.contains('hidden') || !$('#secretPanel').classList.contains('hidden') || !$('#agentTokenPanel').classList.contains('hidden');
+  const opened = !$('#logPanel').classList.contains('hidden') || !$('#retryLogPanel').classList.contains('hidden') || !$('#qrPanel').classList.contains('hidden') || !$('#secretPanel').classList.contains('hidden') || !$('#agentTokenPanel').classList.contains('hidden') || !$('#autoTaskPanel').classList.contains('hidden');
   const locked = document.body.classList.contains('modal-open');
   if (opened && !locked) {
     modalScrollY = window.scrollY || document.documentElement.scrollTop || 0;
@@ -1156,6 +1204,136 @@ async function openAgentToken(id, email) {
   updateModalScrollLock();
 }
 $('#btnCopyAgentTokenValue').addEventListener('click', () => copyText($('#agentTokenValue').value));
+
+function autoTaskConfig() {
+  return {
+    twofa: {label:'创建2FA', query:'twofa=disabled', endpoint:'/api/accounts/create-2fa-bulk'},
+    password: {label:'创建密码', query:'password=missing', endpoint:'/api/accounts/create-password-bulk'},
+    codex: {label:'补跑Codex', query:'codex=incomplete', endpoint:'/api/codex/retry-bulk'},
+  }[AUTO_TASK_MODE];
+}
+function autoTaskRowBusy(row) {
+  if (AUTO_TASK_MODE === 'twofa') return ['queued','running'].includes(row.twofa_task_status || '');
+  if (AUTO_TASK_MODE === 'password') return ['queued','running'].includes(row.password_task_status || '');
+  return (row.codex_status || '') === 'retrying';
+}
+function autoTaskRowStatus(row) {
+  let status = '';
+  if (AUTO_TASK_MODE === 'twofa') status = row.twofa_task_status || '未创建';
+  else if (AUTO_TASK_MODE === 'password') status = row.password_task_status || '未创建';
+  else status = row.codex_status || '未授权';
+  const labels = {queued:'排队中',running:'执行中',retrying:'执行中',failed:'上次失败',stopped:'已停止',skipped:'已跳过'};
+  return labels[status] || status;
+}
+function renderAutoTaskAccounts() {
+  const totalPages = Math.max(1, Math.ceil(AUTO_TASK_TOTAL / AUTO_TASK_PAGE_SIZE));
+  $('#autoTaskAccountsBody').innerHTML = AUTO_TASK_ACCOUNTS.map(row => {
+    const busy = autoTaskRowBusy(row);
+    const checked = AUTO_TASK_SELECTED.has(Number(row.id));
+    return `<tr>
+      <td><input type="checkbox" data-auto-task-account="${esc(row.id)}" ${checked ? 'checked' : ''} ${busy ? 'disabled' : ''}></td>
+      <td class="muted">#${esc(row.id)}</td>
+      <td>${esc(row.email || '')}</td>
+      <td>${busy ? '<span class="pill status-running">' : '<span class="muted">'}${esc(autoTaskRowStatus(row))}</span></td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="4" class="muted">没有符合条件的账号</td></tr>';
+  $('#autoTaskSelectedHint').textContent = `已选 ${AUTO_TASK_SELECTED.size} · 候选 ${AUTO_TASK_TOTAL}`;
+  $('#btnSubmitAutoTask').disabled = AUTO_TASK_SELECTED.size === 0;
+  $('#btnSubmitAutoTask').textContent = `${autoTaskConfig().label} (${AUTO_TASK_SELECTED.size})`;
+  $('#autoTaskPageInfo').textContent = `第 ${AUTO_TASK_PAGE} / ${totalPages} 页`;
+  $('#btnAutoTaskPrev').disabled = AUTO_TASK_PAGE <= 1;
+  $('#btnAutoTaskNext').disabled = AUTO_TASK_PAGE >= totalPages;
+  const eligible = AUTO_TASK_ACCOUNTS.filter(row => !autoTaskRowBusy(row));
+  const allSelected = eligible.length > 0 && eligible.every(row => AUTO_TASK_SELECTED.has(Number(row.id)));
+  $('#btnSelectAutoTaskPage').textContent = allSelected ? '取消当前页' : '全选当前页';
+}
+async function loadAutoTaskAccounts() {
+  if (autoTaskLoading) return;
+  autoTaskLoading = true;
+  try {
+    const q = $('#qAutoTaskAccounts').value.trim();
+    const config = autoTaskConfig();
+    const res = await api(`/api/accounts?paged=1&page=${AUTO_TASK_PAGE}&page_size=${AUTO_TASK_PAGE_SIZE}&archived=0&${config.query}&q=${encodeURIComponent(q)}`);
+    AUTO_TASK_ACCOUNTS = res.items || [];
+    AUTO_TASK_TOTAL = Number(res.total || 0);
+    const totalPages = Math.max(1, Math.ceil(AUTO_TASK_TOTAL / AUTO_TASK_PAGE_SIZE));
+    if (AUTO_TASK_PAGE > totalPages) { AUTO_TASK_PAGE = totalPages; autoTaskLoading = false; return loadAutoTaskAccounts(); }
+    renderAutoTaskAccounts();
+  } catch (err) {
+    $('#autoTaskAccountsBody').innerHTML = `<tr><td colspan="4" class="muted">加载失败：${esc(err.message)}</td></tr>`;
+  } finally {
+    autoTaskLoading = false;
+  }
+}
+function openAutoTaskPanel() {
+  AUTO_TASK_SELECTED.clear();
+  AUTO_TASK_PAGE = 1;
+  $('#autoTaskPanel').classList.remove('hidden');
+  updateModalScrollLock();
+  loadAutoTaskAccounts();
+  clearInterval(autoTaskTimer);
+  autoTaskTimer = setInterval(loadAutoTaskAccounts, 5000);
+}
+function closeAutoTaskPanel() {
+  clearInterval(autoTaskTimer);
+  autoTaskTimer = null;
+  $('#autoTaskPanel').classList.add('hidden');
+  updateModalScrollLock();
+}
+async function submitAutoTasks() {
+  const ids = Array.from(AUTO_TASK_SELECTED);
+  if (!ids.length) return;
+  const config = autoTaskConfig();
+  if (!confirm(`确定为选中的 ${ids.length} 个账号${config.label}吗？\n\n任务将进入后台队列。`)) return;
+  const btn = $('#btnSubmitAutoTask');
+  btn.disabled = true;
+  btn.textContent = '提交中…';
+  try {
+    const body = {account_ids: ids};
+    if (AUTO_TASK_MODE === 'codex') body.workers = Math.max(1, Math.min(16, Number($('#codexBulkWorkers')?.value || 3)));
+    const result = await api(config.endpoint, {
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body),
+    });
+    const started = Number(result.started_count || (result.started || []).length || 0);
+    const skipped = Number(result.skipped_count || (result.skipped || []).length || 0);
+    showToast(skipped ? `已入队 ${started} 个，跳过 ${skipped} 个` : `已入队 ${started} 个任务`);
+    AUTO_TASK_SELECTED.clear();
+    await loadAutoTaskAccounts();
+    loadAccounts();
+  } catch (err) {
+    showToast(`${config.label}提交失败: ${err.message}`);
+  } finally {
+    renderAutoTaskAccounts();
+  }
+}
+
+$('#btnOpenAutoTask').addEventListener('click', openAutoTaskPanel);
+$('#btnCloseAutoTask').addEventListener('click', closeAutoTaskPanel);
+$('#btnSubmitAutoTask').addEventListener('click', submitAutoTasks);
+$('#qAutoTaskAccounts').addEventListener('input', debounce(() => {
+  AUTO_TASK_SELECTED.clear(); AUTO_TASK_PAGE = 1; loadAutoTaskAccounts();
+}, 250));
+$$('input[name="autoTaskMode"]').forEach(input => input.addEventListener('change', () => {
+  AUTO_TASK_MODE = input.value;
+  AUTO_TASK_SELECTED.clear();
+  AUTO_TASK_PAGE = 1;
+  loadAutoTaskAccounts();
+}));
+$('#autoTaskAccountsBody').addEventListener('change', e => {
+  const checkbox = e.target.closest('[data-auto-task-account]');
+  if (!checkbox) return;
+  const id = Number(checkbox.dataset.autoTaskAccount);
+  if (checkbox.checked) AUTO_TASK_SELECTED.add(id); else AUTO_TASK_SELECTED.delete(id);
+  renderAutoTaskAccounts();
+});
+$('#btnSelectAutoTaskPage').addEventListener('click', () => {
+  const eligible = AUTO_TASK_ACCOUNTS.filter(row => !autoTaskRowBusy(row));
+  const allSelected = eligible.length > 0 && eligible.every(row => AUTO_TASK_SELECTED.has(Number(row.id)));
+  eligible.forEach(row => allSelected ? AUTO_TASK_SELECTED.delete(Number(row.id)) : AUTO_TASK_SELECTED.add(Number(row.id)));
+  renderAutoTaskAccounts();
+});
+$('#btnAutoTaskPrev').addEventListener('click', () => { AUTO_TASK_PAGE = Math.max(1, AUTO_TASK_PAGE - 1); loadAutoTaskAccounts(); });
+$('#btnAutoTaskNext').addEventListener('click', () => { AUTO_TASK_PAGE += 1; loadAutoTaskAccounts(); });
 
 $('#jobsBody').addEventListener('pointerdown', (e) => {
   const retryBtn = e.target.closest('[data-retry-job]');
@@ -1901,7 +2079,6 @@ $('#btnExtractSelectedLinks').addEventListener('click', extractSelectedLinks);
 $('#btnGenerateSelectedAgent').addEventListener('click', generateSelectedCodexAgents);
 $('#btnDownloadSelectedAgent').addEventListener('click', downloadSelectedCodexAgents);
 $('#btnUploadSelectedAgentSub2').addEventListener('click', uploadSelectedCodexAgentSub2);
-$('#btnCreateSelected2FA').addEventListener('click', createSelectedTwofa);
 $('#btnRetrySelectedCodex').addEventListener('click', retrySelectedCodex);
 $('#btnDownloadSelectedCpa').addEventListener('click', downloadSelectedCpa);
 $('#btnStopSelectedCodex').addEventListener('click', stopSelectedCodex);

@@ -29,6 +29,8 @@ _PLAN_CHECK_STALE_SECONDS = 120
 _PLAN_CHECK_QUEUE_STALE_SECONDS = 1800
 _TWOFA_TASK_STALE_SECONDS = 900
 _TWOFA_TASK_QUEUE_STALE_SECONDS = 3600
+_PASSWORD_TASK_STALE_SECONDS = 900
+_PASSWORD_TASK_QUEUE_STALE_SECONDS = 3600
 
 _OUTLOOK_JSON = _PROJECT_ROOT / "用于注册的邮箱.json"
 _OUTLOOK_TXT = _PROJECT_ROOT / "用于注册的邮箱.txt"
@@ -585,9 +587,11 @@ def _account_matches_material_filters(
     row: dict,
     twofa_filter: str | None = None,
     password_filter: str | None = None,
+    codex_filter: str | None = None,
 ) -> bool:
     twofa = str(twofa_filter or "").strip().lower()
     password = str(password_filter or "").strip().lower()
+    codex = str(codex_filter or "").strip().lower()
     has_twofa = bool(str(row.get("totp_secret") or "").strip())
     has_password = bool(str(row.get("registration_password") or "").strip())
     if twofa in {"enabled", "with", "yes", "1"} and not has_twofa:
@@ -597,6 +601,9 @@ def _account_matches_material_filters(
     if password in {"present", "with", "yes", "1"} and not has_password:
         return False
     if password in {"missing", "without", "no", "0"} and has_password:
+        return False
+    codex_status = str(row.get("codex_status") or "").strip().lower()
+    if codex in {"incomplete", "missing", "not_success"} and codex_status in {"success", "deactivated"}:
         return False
     return True
 
@@ -980,6 +987,110 @@ def recover_interrupted_twofa_tasks() -> int:
         return recovered
 
 
+def claim_account_password_task(acc_id: int, trigger: str = "manual") -> bool:
+    """Atomically queue password creation for an account without a saved login password."""
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None or str(row.get("registration_password") or "").strip():
+            return False
+        current_status = str(row.get("password_task_status") or "")
+        if current_status in {"queued", "running"}:
+            try:
+                stamp_key = "password_task_queued_at" if current_status == "queued" else "password_task_started_at"
+                stale_after = _PASSWORD_TASK_QUEUE_STALE_SECONDS if current_status == "queued" else _PASSWORD_TASK_STALE_SECONDS
+                started_at = datetime.fromisoformat(str(row.get(stamp_key) or ""))
+                if (datetime.now() - started_at).total_seconds() < stale_after:
+                    return False
+            except (TypeError, ValueError):
+                pass
+        now = _now()
+        row.update({
+            "password_task_status": "queued",
+            "password_task_ok": False,
+            "password_task_trigger": str(trigger or "manual"),
+            "password_task_queued_at": now,
+            "password_task_started_at": None,
+            "password_task_completed_at": None,
+            "password_task_error": None,
+            "password_task_message": "创建密码任务已排队",
+            "updated_at": now,
+        })
+        _save_accounts(accounts)
+        return True
+
+
+def mark_account_password_task_running(acc_id: int) -> bool:
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None or row.get("password_task_status") not in {"queued", "running"}:
+            return False
+        now = _now()
+        row.update({
+            "password_task_status": "running",
+            "password_task_started_at": now,
+            "password_task_error": None,
+            "password_task_message": "正在登录账号并创建密码",
+            "updated_at": now,
+        })
+        _save_accounts(accounts)
+        return True
+
+
+def update_account_password_task(acc_id: int, result: dict | None = None) -> bool:
+    result = result or {}
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None:
+            return False
+        status = str(result.get("status") or ("success" if result.get("ok") else "failed"))
+        password = str(result.get("registration_password") or "").strip()
+        ok = bool(result.get("ok")) and status == "success" and bool(password or row.get("registration_password"))
+        if status == "success" and not ok:
+            status = "failed"
+        now = _now()
+        row.update({
+            "password_task_status": status,
+            "password_task_ok": ok,
+            "password_task_checked_at": result.get("checked_at") or now,
+            "password_task_error": None if ok or status == "running" else result.get("error"),
+            "password_task_message": result.get("message") or ("密码已创建" if ok else "创建密码失败"),
+            "updated_at": now,
+        })
+        if status in {"success", "failed", "stopped"}:
+            row["password_task_completed_at"] = now
+        if result.get("proxy_used") is not None:
+            row["password_task_proxy_used"] = result.get("proxy_used")
+        if ok and password:
+            row["registration_password"] = password
+        _save_accounts(accounts)
+        return True
+
+
+def recover_interrupted_password_tasks() -> int:
+    with _LOCK:
+        accounts = _load_accounts()
+        recovered = 0
+        now = _now()
+        for row in accounts:
+            if row.get("password_task_status") not in {"queued", "running"}:
+                continue
+            row.update({
+                "password_task_status": "failed",
+                "password_task_ok": False,
+                "password_task_error": "WebUI 重启导致创建密码任务中断，请重新提交",
+                "password_task_message": "创建密码任务已中断",
+                "password_task_completed_at": now,
+                "updated_at": now,
+            })
+            recovered += 1
+        if recovered:
+            _save_accounts(accounts)
+        return recovered
+
+
 def claim_account_plan_check(
     acc_id: int | None = None,
     email: str | None = None,
@@ -1260,6 +1371,7 @@ def _filtered_decorated_accounts(
     q: str | None = None,
     twofa_filter: str | None = None,
     password_filter: str | None = None,
+    codex_filter: str | None = None,
 ) -> list[dict]:
     rows = _load_accounts()
     if archived in (True, "1", "true", "yes", "only"):
@@ -1270,7 +1382,7 @@ def _filtered_decorated_accounts(
         rows = [r for r in rows if not bool(r.get("archived"))]
     decorated = [_decorate_account(r) for r in rows]
     decorated = [r for r in decorated if _account_matches_plan_filter(r, plan_filter)]
-    decorated = [r for r in decorated if _account_matches_material_filters(r, twofa_filter, password_filter)]
+    decorated = [r for r in decorated if _account_matches_material_filters(r, twofa_filter, password_filter, codex_filter)]
     decorated = [r for r in decorated if _account_matches_query(r, q)]
     return sorted(decorated, key=lambda x: int(x.get("id") or 0), reverse=True)
 
@@ -1283,6 +1395,7 @@ def list_account_plan_check_statuses(
     q: str | None = None,
     twofa_filter: str | None = None,
     password_filter: str | None = None,
+    codex_filter: str | None = None,
 ) -> dict:
     """返回不含 Token/邮箱密码的套餐查询轻量状态快照。"""
     fields = (
@@ -1307,6 +1420,9 @@ def list_account_plan_check_statuses(
         "twofa_task_status", "twofa_task_ok", "twofa_task_message", "twofa_task_error",
         "twofa_task_trigger", "twofa_task_queued_at", "twofa_task_started_at",
         "twofa_task_completed_at", "twofa_task_proxy_used",
+        "password_task_status", "password_task_ok", "password_task_message", "password_task_error",
+        "password_task_trigger", "password_task_queued_at", "password_task_started_at",
+        "password_task_completed_at", "password_task_proxy_used",
     )
     with _LOCK:
         all_rows = _filtered_decorated_accounts(
@@ -1315,6 +1431,7 @@ def list_account_plan_check_statuses(
             q=q,
             twofa_filter=twofa_filter,
             password_filter=password_filter,
+            codex_filter=codex_filter,
         )
         total = len(all_rows)
         limit = max(1, int(limit))
@@ -1357,6 +1474,8 @@ def list_account_plan_check_statuses(
                     "codex_agent_status": row.get("codex_agent_status"),
                     "twofa_task_status": row.get("twofa_task_status"),
                     "totp_enabled": bool(str(row.get("totp_secret") or "").strip()),
+                    "password_task_status": row.get("password_task_status"),
+                    "has_registration_password": bool(str(row.get("registration_password") or "").strip()),
                 }
                 for row in all_rows
             ],
@@ -1376,6 +1495,7 @@ def list_accounts(
     q: str | None = None,
     twofa_filter: str | None = None,
     password_filter: str | None = None,
+    codex_filter: str | None = None,
 ) -> list[dict]:
     with _LOCK:
         rows = _filtered_decorated_accounts(
@@ -1384,6 +1504,7 @@ def list_accounts(
             q=q,
             twofa_filter=twofa_filter,
             password_filter=password_filter,
+            codex_filter=codex_filter,
         )
         return rows[max(0, int(offset or 0)): max(0, int(offset or 0)) + max(1, int(limit))]
 
@@ -1396,6 +1517,7 @@ def list_accounts_page(
     q: str | None = None,
     twofa_filter: str | None = None,
     password_filter: str | None = None,
+    codex_filter: str | None = None,
 ) -> dict:
     with _LOCK:
         rows = _filtered_decorated_accounts(
@@ -1404,6 +1526,7 @@ def list_accounts_page(
             q=q,
             twofa_filter=twofa_filter,
             password_filter=password_filter,
+            codex_filter=codex_filter,
         )
         total = len(rows)
         limit = max(1, int(limit))

@@ -23,6 +23,7 @@ from core import (
     codex_retry_service,
     db,
     extract_link_service,
+    password_task_service,
     plan_check_service,
     twofa_task_service,
 )
@@ -103,7 +104,7 @@ def _compact_account_for_list(row: dict) -> dict:
         "user_name", "email_source", "note", "archived", "created_at",
         "plan_type", "current_plan_type", "plus_trial_eligible",
         "plan_check_status", "codex_status", "codex_agent_status",
-        "twofa_task_status",
+        "twofa_task_status", "password_task_status",
     ):
         if key in row:
             out[key] = row.get(key)
@@ -125,6 +126,7 @@ def _compact_account_for_list(row: dict) -> dict:
         "codex_error", "codex_agent_message", "codex_agent_runtime_id",
         "codex_agent_sub2api_url", "codex_agent_sub2api_mode", "codex_agent_sub2api_total",
         "twofa_task_message", "twofa_task_error", "twofa_task_proxy_used",
+        "password_task_message", "password_task_error", "password_task_proxy_used",
     )
     for key in optional_keys:
         value = row.get(key)
@@ -234,7 +236,8 @@ def create_app(auth_code: str | None = None) -> Flask:
             recovered_extract_links = db.recover_interrupted_extract_links()
             recovered_codex_agents = db.recover_interrupted_codex_agents()
             recovered_twofa_tasks = db.recover_interrupted_twofa_tasks()
-            recovered_total = recovered_jobs + recovered_plan_checks + recovered_extract_links + recovered_codex_agents + recovered_twofa_tasks
+            recovered_password_tasks = db.recover_interrupted_password_tasks()
+            recovered_total = recovered_jobs + recovered_plan_checks + recovered_extract_links + recovered_codex_agents + recovered_twofa_tasks + recovered_password_tasks
             if recovered_total:
                 logger.warning("租户 %s 启动时已恢复 %s 个中断状态", tenant_id, recovered_total)
 
@@ -292,6 +295,7 @@ def create_app(auth_code: str | None = None) -> Flask:
         plan_filter = str(request.args.get("plan", default="") or "").lower()
         twofa_filter = str(request.args.get("twofa", default="") or "").lower()
         password_filter = str(request.args.get("password", default="") or "").lower()
+        codex_filter = str(request.args.get("codex", default="") or "").lower()
         q = str(request.args.get("q", default="") or "").strip()
         # 新分页接口：传 page/page_size 或 paged=1 时返回 {items,total,page,page_size,...}
         paged = str(request.args.get("paged", default="") or "").lower() in {"1", "true", "yes"}
@@ -309,6 +313,7 @@ def create_app(auth_code: str | None = None) -> Flask:
                 q=q,
                 twofa_filter=twofa_filter,
                 password_filter=password_filter,
+                codex_filter=codex_filter,
             )
             result["items"] = [_compact_account_for_list(r) for r in (result.get("items") or [])]
             result.update({"ok": True, "page": page, "page_size": page_size, "compact": True})
@@ -320,6 +325,7 @@ def create_app(auth_code: str | None = None) -> Flask:
             q=q,
             twofa_filter=twofa_filter,
             password_filter=password_filter,
+            codex_filter=codex_filter,
         ))
 
     @app.get("/api/accounts/plan-check-status")
@@ -330,6 +336,7 @@ def create_app(auth_code: str | None = None) -> Flask:
         plan_filter = str(request.args.get("plan", default="") or "").lower()
         twofa_filter = str(request.args.get("twofa", default="") or "").lower()
         password_filter = str(request.args.get("password", default="") or "").lower()
+        codex_filter = str(request.args.get("codex", default="") or "").lower()
         q = str(request.args.get("q", default="") or "").strip()
         page_arg = request.args.get("page", default=None, type=int)
         page_size_arg = request.args.get("page_size", default=None, type=int)
@@ -345,6 +352,7 @@ def create_app(auth_code: str | None = None) -> Flask:
                 q=q,
                 twofa_filter=twofa_filter,
                 password_filter=password_filter,
+                codex_filter=codex_filter,
             )
             snapshot.update({"page": page, "page_size": page_size})
         else:
@@ -355,6 +363,7 @@ def create_app(auth_code: str | None = None) -> Flask:
                 q=q,
                 twofa_filter=twofa_filter,
                 password_filter=password_filter,
+                codex_filter=codex_filter,
             )
         snapshot["queue"] = plan_check_service.queue_settings()
         return jsonify(snapshot)
@@ -647,6 +656,87 @@ def create_app(auth_code: str | None = None) -> Flask:
             "skipped": skipped,
             "skipped_count": len(skipped),
             "queue": twofa_task_service.queue_settings(),
+        }), 202
+
+    @app.post("/api/accounts/create-password")
+    def api_account_create_password():
+        """Queue password creation for one existing account. Body {account_id|id}."""
+        data = request.get_json(silent=True) or {}
+        acc_id = data.get("account_id") or data.get("id")
+        try:
+            acc = db.get_account(int(acc_id))
+        except Exception:
+            acc = None
+        if not acc:
+            return jsonify({"ok": False, "error": "账号不存在"}), 404
+        if str(acc.get("registration_password") or "").strip():
+            return jsonify({"ok": False, "error": "该账号已有密码"}), 409
+        queued = password_task_service.enqueue_account_password(
+            account_id=int(acc["id"]),
+            email=str(acc.get("email") or ""),
+            trigger="manual",
+        )
+        if queued.get("busy"):
+            return jsonify({"ok": False, **queued}), 409
+        if not queued.get("accepted"):
+            return jsonify({"ok": False, **queued}), 503
+        return jsonify({"ok": True, "started": True, **queued}), 202
+
+    @app.post("/api/accounts/create-password-bulk")
+    def api_accounts_create_password_bulk():
+        """Queue password creation for selected accounts. Body {account_ids:[...]}."""
+        data = request.get_json(silent=True) or {}
+        ids = data.get("account_ids") or data.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            return jsonify({"ok": False, "error": "account_ids 必须是非空数组"}), 400
+        if len(ids) > 500:
+            return jsonify({"ok": False, "error": "单次最多提交 500 个账号"}), 400
+
+        started = []
+        busy = []
+        failed = []
+        skipped = []
+        seen = set()
+        for raw in ids:
+            try:
+                acc_id = int(raw)
+            except Exception:
+                skipped.append({"id": raw, "reason": "ID 非法"})
+                continue
+            if acc_id in seen:
+                continue
+            seen.add(acc_id)
+            acc = db.get_account(acc_id)
+            if not acc:
+                skipped.append({"id": acc_id, "reason": "账号不存在"})
+                continue
+            email = str(acc.get("email") or "")
+            if str(acc.get("registration_password") or "").strip():
+                skipped.append({"id": acc_id, "email": email, "reason": "已有密码"})
+                continue
+            queued = password_task_service.enqueue_account_password(
+                account_id=acc_id,
+                email=email,
+                trigger="manual_bulk",
+            )
+            item = {"id": acc_id, "email": email, **queued}
+            if queued.get("accepted"):
+                started.append(item)
+            elif queued.get("busy"):
+                busy.append(item)
+            else:
+                failed.append(item)
+        return jsonify({
+            "ok": True,
+            "started": started,
+            "started_count": len(started),
+            "busy": busy,
+            "busy_count": len(busy),
+            "failed": failed,
+            "failed_count": len(failed),
+            "skipped": skipped,
+            "skipped_count": len(skipped),
+            "queue": password_task_service.queue_settings(),
         }), 202
 
     @app.post("/api/accounts/check-plan-bulk")
