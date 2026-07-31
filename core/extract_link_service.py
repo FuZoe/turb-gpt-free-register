@@ -6,10 +6,10 @@ import json
 import logging
 import os
 import threading
-import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from urllib.parse import quote, urlencode
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 try:
@@ -48,14 +48,13 @@ def _int_setting(name: str, default: int, lower: int, upper: int) -> int:
     return max(lower, min(upper, value))
 
 
-SUPPORTED_LINK_TYPES = {"pix", "upi", "kakao_pay", "ideal"}
+SUPPORTED_LINK_TYPES = {"upi"}
 
 
 def _link_type(value: str | None = None) -> str:
-    t = str(value or _runtime_setting("EXTRACT_LINK_TYPE", "pix") or "pix").strip().lower()
-    if t not in SUPPORTED_LINK_TYPES:
-        raise ValueError("提链类型无效，仅支持 pix / upi / kakao_pay / ideal")
-    return t
+    # upi.newzoe.cloud is UPI-only. Ignore stale PIX/KAKAO/IDEAL values left in
+    # existing .env files so upgrading the service works without manual cleanup.
+    return "upi"
 
 
 def _api_base() -> str:
@@ -114,117 +113,92 @@ def query_cdk(*, cdk: str | None = None) -> dict:
             pass
 
 
-def _create_extract_job(*, token: str, link_type: str, cdk: str) -> dict:
+def _normalize_upi_result(result: dict, base: str) -> dict:
+    """Map upi.newzoe.cloud fields to the account-table result schema."""
+    value = dict(result or {})
+    upi_url = str(value.get("upi_instructions_url") or value.get("long_url") or "").strip()
+    qr_url = str(value.get("qr_url") or value.get("image_url_svg") or "").strip()
+    if qr_url.startswith("/"):
+        qr_url = base.rstrip("/") + qr_url
+    value.update({
+        "long_url": upi_url,
+        "image_url_svg": qr_url,
+        "payment_method": "upi",
+        "payment_link_type": "upi",
+    })
+    if value.get("cdk_remaining") is None and value.get("cdk_remaining_uses") is not None:
+        value["cdk_remaining"] = value.get("cdk_remaining_uses")
+    return value
+
+
+def _iter_upi_events(*, token: str, cdk: str, job_id: str):
+    """Submit one AT to upi.newzoe.cloud and translate its NDJSON stream."""
     base = _api_base()
-    timeout = _int_setting("EXTRACT_LINK_REQUEST_TIMEOUT", 30, 5, 300)
-    payload = {"link_type": _link_type(link_type), "cdk": _cdk(cdk), "token": token}
+    timeout = _int_setting("EXTRACT_LINK_EVENT_TIMEOUT", 600, 30, 900)
+    payload = {
+        "job_id": job_id,
+        "tokens": [token],
+        "proxy_mode": "paid",
+        "cdk": _cdk(cdk),
+        "payment_method_type": "upi",
+        "country": "IN",
+        "payment_locale": "pt-BR",
+        "batch_recovery_rounds": "unlimited",
+    }
+
+    def translate(row):
+        if not isinstance(row, dict):
+            return None
+        row_type = str(row.get("type") or "").strip().lower()
+        if row_type in {"progress", "log", "step"}:
+            message = str(row.get("message") or row.get("stage") or "UPI 提链处理中")
+            return "log", {"message": message}
+        if row_type == "stopped":
+            return "error", {"message": str(row.get("message") or "UPI 提链任务已停止")}
+        if row.get("index") is not None:
+            result = row.get("result") if isinstance(row.get("result"), dict) else {}
+            if row.get("ok"):
+                normalized = _normalize_upi_result(result, base)
+                if not normalized.get("long_url"):
+                    return "error", {"message": "UPI 服务返回成功但缺少付款链接", "details": result}
+                return "result", {"result": normalized}
+            message = str(row.get("error") or result.get("message") or result.get("error") or "UPI 提链失败")
+            return "error", {"message": message, "details": result}
+        return None
+
     s = _session()
     try:
         if s is None:
             body = json.dumps(payload).encode("utf-8")
             req = Request(
-                f"{base}/api/extract",
+                f"{base}/api/extract-batch",
                 data=body,
-                headers={"Accept": "application/json", "Content-Type": "application/json"},
+                headers={"Accept": "application/x-ndjson", "Content-Type": "application/json"},
                 method="POST",
             )
             with urlopen(req, timeout=timeout) as resp:
-                data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
-            if not isinstance(data, dict) or not data.get("job_id"):
-                raise RuntimeError(f"提链服务未返回 job_id: {data}")
-            return data
-        resp = s.post(f"{base}/api/extract", json=payload, timeout=timeout)
-        try:
-            data = resp.json()
-        except Exception:
-            data = {"error": (resp.text or "")[:300]}
-        if resp.status_code < 200 or resp.status_code >= 300:
-            raise RuntimeError(data.get("error") or f"HTTP {resp.status_code}")
-        if not isinstance(data, dict) or not data.get("job_id"):
-            raise RuntimeError(f"提链服务未返回 job_id: {data}")
-        return data
-    finally:
-        try:
-            s.close()
-        except Exception:
-            pass
-
-
-def _iter_sse_events(*, job_id: str, cdk: str):
-    base = _api_base()
-    timeout = _int_setting("EXTRACT_LINK_EVENT_TIMEOUT", 180, 30, 900)
-    url = f"{base}/api/jobs/{quote(job_id, safe='')}/events?{urlencode({'cdk': _cdk(cdk)})}"
-    s = _session()
-    try:
-        if s is None:
-            req = Request(url, headers={"Accept": "text/event-stream"})
-            with urlopen(req, timeout=timeout) as resp:
-                event = "message"
-                data_lines: list[str] = []
                 for raw in resp:
-                    line = raw.decode("utf-8", "replace").rstrip("\r\n")
-                    if line == "":
-                        if data_lines:
-                            text = "\n".join(data_lines)
-                            try:
-                                data = json.loads(text)
-                            except Exception:
-                                data = {"raw": text}
-                            yield event, data
-                        event = "message"
-                        data_lines = []
+                    line = raw.decode("utf-8", "replace").strip()
+                    if not line:
                         continue
-                    if line.startswith(":"):
-                        continue
-                    if line.startswith("event:"):
-                        event = line.split(":", 1)[1].strip() or "message"
-                    elif line.startswith("data:"):
-                        data_lines.append(line.split(":", 1)[1].lstrip())
-                if data_lines:
-                    text = "\n".join(data_lines)
-                    try:
-                        data = json.loads(text)
-                    except Exception:
-                        data = {"raw": text}
-                    yield event, data
+                    event = translate(json.loads(line))
+                    if event:
+                        yield event
             return
-        resp = s.get(url, timeout=timeout, stream=True)
+        resp = s.post(f"{base}/api/extract-batch", json=payload, timeout=timeout, stream=True)
         if resp.status_code < 200 or resp.status_code >= 300:
-            raise RuntimeError(f"监听提链事件失败 HTTP {resp.status_code}: {(resp.text or '')[:300]}")
-        event = "message"
-        data_lines: list[str] = []
-        for raw in resp.iter_lines():
-            if raw is None:
-                continue
-            if isinstance(raw, bytes):
-                line = raw.decode("utf-8", "replace")
-            else:
-                line = str(raw)
-            line = line.rstrip("\r")
-            if line == "":
-                if data_lines:
-                    text = "\n".join(data_lines)
-                    try:
-                        data = json.loads(text)
-                    except Exception:
-                        data = {"raw": text}
-                    yield event, data
-                event = "message"
-                data_lines = []
-                continue
-            if line.startswith(":"):
-                continue
-            if line.startswith("event:"):
-                event = line.split(":", 1)[1].strip() or "message"
-            elif line.startswith("data:"):
-                data_lines.append(line.split(":", 1)[1].lstrip())
-        if data_lines:
-            text = "\n".join(data_lines)
             try:
-                data = json.loads(text)
+                data = resp.json()
             except Exception:
-                data = {"raw": text}
-            yield event, data
+                data = {"message": (resp.text or "")[:300]}
+            raise RuntimeError(data.get("message") or data.get("error") or f"HTTP {resp.status_code}")
+        for raw in resp.iter_lines():
+            if not raw:
+                continue
+            line = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
+            event = translate(json.loads(line))
+            if event:
+                yield event
     finally:
         try:
             s.close()
@@ -273,17 +247,15 @@ def _run_extract(*, account_id: int, email: str, access_token: str, link_type: s
     try:
         if not db.mark_account_extract_running(account_id):
             return {"ok": False, "error": "账号已删除或提链状态已被重置"}
-        job = _create_extract_job(token=access_token, link_type=link_type, cdk=cdk)
-        job_id = str(job.get("job_id") or "")
+        job_id = uuid.uuid4().hex
         db.update_account_extract(account_id, {
             "ok": False,
             "status": "running",
             "job_id": job_id,
             "link_type": link_type,
             "message": "提链任务已创建，等待结果",
-            "cdk_remaining": job.get("cdk_remaining"),
         })
-        for event, data in _iter_sse_events(job_id=job_id, cdk=cdk):
+        for event, data in _iter_upi_events(token=access_token, cdk=cdk, job_id=job_id):
             last_event = {"event": event, "data": data}
             if event == "log":
                 msg = str((data or {}).get("message") or "")[:300]
