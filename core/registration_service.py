@@ -32,6 +32,24 @@ _executor_generation = 0
 _retired_executors: list[ThreadPoolExecutor] = []
 _executor_lock = threading.RLock()
 
+
+def _global_registration_limit() -> int:
+    """Return the process-wide browser limit shared by every tenant and pool generation."""
+    try:
+        raw = (
+            os.getenv("REGISTRATION_GLOBAL_CONCURRENCY")
+            or os.getenv("REGISTRATION_WORKERS_LIMIT")
+            or "3"
+        )
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = 3
+    return max(_MIN_MAX_WORKERS, min(_MAX_MAX_WORKERS, value))
+
+
+_GLOBAL_REGISTRATION_LIMIT = _global_registration_limit()
+_GLOBAL_REGISTRATION_SLOTS = threading.BoundedSemaphore(_GLOBAL_REGISTRATION_LIMIT)
+
 _STOP_EVENTS: dict[tuple[str, int], threading.Event] = {}
 _ACTIVE_JOBS: set[tuple[str, int]] = set()
 _STOP_LOCK = threading.Lock()
@@ -191,9 +209,27 @@ def _is_cloudflare_challenge_failure(error: object) -> bool:
     return "cloudflarechallengeerror" in text or "cloudflare challenge/403" in text
 
 
+def _is_proxy_navigation_failure(error: object) -> bool:
+    """Identify browser navigation failures that should rotate the current proxy."""
+    text = str(error or "").lower()
+    if "page.goto" not in text:
+        return False
+    return any(marker in text for marker in (
+        "timeout 30000ms exceeded",
+        "err_connection_closed",
+        "err_connection_reset",
+        "err_connection_timed_out",
+        "err_proxy_connection_failed",
+        "err_socks_connection_failed",
+        "ssl_error_syscall",
+    ))
+
+
 def _maybe_auto_retry_cloudflare(job_id: int, error: object) -> dict | None:
-    """Cloudflare 拦截时自动创建子任务，让下一次随机选择另一固定出口。"""
-    if not _is_cloudflare_challenge_failure(error):
+    """认证拦截或代理导航失败时创建子任务，并随机选择另一固定出口。"""
+    cloudflare_failure = _is_cloudflare_challenge_failure(error)
+    navigation_failure = _is_proxy_navigation_failure(error)
+    if not cloudflare_failure and not navigation_failure:
         return None
     source = db.get_job(int(job_id)) or {}
     try:
@@ -202,21 +238,29 @@ def _maybe_auto_retry_cloudflare(job_id: int, error: object) -> dict | None:
         max_retries = 3
     attempt = int(source.get("retry_attempt") or 0)
     if attempt >= max_retries:
-        message = f"Cloudflare 自动换线路已达到 {max_retries} 次上限"
+        reason_label = "Cloudflare" if cloudflare_failure else "代理导航超时"
+        message = f"{reason_label} 自动换线路已达到 {max_retries} 次上限"
         _append_job_log(job_id, message, source="cloudflare-retry")
         logger.warning("[Job %s] %s", job_id, message)
         return {"ok": False, "created": False, "error": message}
     result = retry_job(job_id, workers=get_executor_workers())
     child = (result or {}).get("job") or {}
     if result.get("ok"):
-        message = f"检测到 Cloudflare 403，已自动冷却当前线路并创建换线路任务 #{child.get('id')}（{attempt + 1}/{max_retries}）"
+        reason_label = "Cloudflare 403" if cloudflare_failure else "代理导航超时"
+        message = f"检测到 {reason_label}，已自动冷却当前线路并创建换线路任务 #{child.get('id')}（{attempt + 1}/{max_retries}）"
         _append_job_log(job_id, message, source="cloudflare-retry")
         if child.get("id"):
-            _append_job_log(int(child["id"]), f"由任务 #{job_id} 遇到 Cloudflare 403 自动换线路", source="cloudflare-retry")
+            _append_job_log(int(child["id"]), f"由任务 #{job_id} 遇到 {reason_label} 自动换线路", source="cloudflare-retry")
         logger.warning("[Job %s] %s", job_id, message)
     else:
         logger.error("[Job %s] Cloudflare 自动换线路任务创建失败：%s", job_id, result.get("error"))
     return result
+
+
+def _run_registration_with_global_slot(tenant_id: str, func, *args) -> Any:
+    """Run one browser lifecycle under the hard process-wide concurrency cap."""
+    with _GLOBAL_REGISTRATION_SLOTS:
+        return run_for_tenant(tenant_id, func, *args)
 
 
 def _disable_job_email(email: str | None, reason: str) -> bool:
@@ -539,7 +583,7 @@ def submit_registration(count: int = 1, email_source: str | None = None, workers
         for _ in range(count):
             job = db.create_job(email_source=email_source)
             try:
-                executor.submit(run_for_tenant, tenant_id, _run_one_job, job["id"], job["log_file"])
+                executor.submit(_run_registration_with_global_slot, tenant_id, _run_one_job, job["id"], job["log_file"])
             except Exception as exc:
                 db.update_job(
                     int(job["id"]),
@@ -672,9 +716,9 @@ def retry_job(job_id: int, workers: int | None = None) -> dict:
             executor = get_executor(max_workers=workers)
             tenant_id = current_tenant()
             if action == "codex":
-                executor.submit(run_for_tenant, tenant_id, _run_codex_retry_job, job["id"], job["log_file"], email, int(account_id))
+                executor.submit(_run_registration_with_global_slot, tenant_id, _run_codex_retry_job, job["id"], job["log_file"], email, int(account_id))
             else:
-                executor.submit(run_for_tenant, tenant_id, _run_one_job, job["id"], job["log_file"])
+                executor.submit(_run_registration_with_global_slot, tenant_id, _run_one_job, job["id"], job["log_file"])
     except Exception as exc:
         if reserved_codex:
             codex_retry_service.release(email)

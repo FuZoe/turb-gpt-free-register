@@ -28,6 +28,21 @@ from core.roxy_registration import (  # noqa: F401
 logger = logging.getLogger(__name__)
 
 
+def _is_proxy_navigation_failure(error: object) -> bool:
+    text = str(error or "").lower()
+    if "page.goto" not in text:
+        return False
+    return any(marker in text for marker in (
+        "timeout 30000ms exceeded",
+        "err_connection_closed",
+        "err_connection_reset",
+        "err_connection_timed_out",
+        "err_proxy_connection_failed",
+        "err_socks_connection_failed",
+        "ssl_error_syscall",
+    ))
+
+
 def _capture_cloak_failure_diagnostics(driver, batch_dir: Path | None = None) -> None:
     """在注册异常后采集旁路诊断；任何采集错误都只记日志。"""
     if driver is None:
@@ -237,13 +252,14 @@ def _run_cloak_registration_impl(email: str, name: str, birthday: str, proxy: st
         }
     except Exception as exc:
         logger.error("[Cloak注册] 失败：%s: %s", type(exc).__name__, exc)
-        if is_cloudflare_challenge_error(exc):
+        if is_cloudflare_challenge_error(exc) or _is_proxy_navigation_failure(exc):
             used_proxy = ((opened.raw or {}).get("proxy") if opened else None) or proxy or None
             try:
                 from config.proxy import mark_proxy_temporarily_bad
 
                 mark_proxy_temporarily_bad(used_proxy, ttl_seconds=900)
-                logger.warning("[Cloak注册] Cloudflare 线路已冷却 15 分钟：%s", used_proxy)
+                reason = "Cloudflare" if is_cloudflare_challenge_error(exc) else "导航超时"
+                logger.warning("[Cloak注册] %s线路已冷却 15 分钟：%s", reason, used_proxy)
             except Exception:
                 logger.debug("[Cloak注册] 标记 Cloudflare 线路冷却失败", exc_info=True)
         logger.debug("[Cloak注册] 失败详情", exc_info=True)

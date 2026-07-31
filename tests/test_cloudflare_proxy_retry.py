@@ -53,6 +53,35 @@ def test_cloudflare_auto_retry_stops_at_limit(monkeypatch):
     assert called == []
 
 
+def test_navigation_timeout_creates_tracked_auto_retry(monkeypatch):
+    logs = []
+    monkeypatch.setenv("REGISTRATION_CF_AUTO_RETRIES", "3")
+    monkeypatch.setattr(service.db, "get_job", lambda _job_id: {"id": 332, "retry_attempt": 0})
+    monkeypatch.setattr(service, "get_executor_workers", lambda: 3)
+    monkeypatch.setattr(
+        service,
+        "retry_job",
+        lambda job_id, workers=None: {"ok": True, "created": True, "job": {"id": 335}},
+    )
+    monkeypatch.setattr(
+        service,
+        "_append_job_log",
+        lambda job_id, message, source="": logs.append((job_id, message, source)),
+    )
+
+    result = service._maybe_auto_retry_cloudflare(
+        332,
+        "TimeoutError: Page.goto: Timeout 30000ms exceeded.",
+    )
+
+    assert result["job"]["id"] == 335
+    assert any("代理导航超时" in message for _job_id, message, _source in logs)
+
+
+def test_unrelated_timeout_does_not_rotate_proxy():
+    assert service._is_proxy_navigation_failure("等待 OTP 输入框超时") is False
+
+
 def test_otp_input_stage_surfaces_cloudflare_instead_of_timing_out(monkeypatch):
     state = {
         "url": "https://auth.openai.com/api/accounts/email-otp/send",
