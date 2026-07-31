@@ -3062,7 +3062,7 @@ function renderProxyTestResults(response) {
     共 ${fmt(response.count)} 条 ·
     <span style="color:var(--green);font-weight:800;">成功 ${fmt(response.success)}</span> ·
     <span style="color:${response.failed ? 'var(--red)' : 'var(--green)'};font-weight:800;">失败 ${fmt(response.failed)}</span> ·
-    平均延迟 ${avg}
+    平均延迟 ${avg}${response.retried ? ` · 重试 ${fmt(response.retried)} 条，恢复 ${fmt(response.recovered || 0)} 条` : ''}
   `;
   const rows = response.results || [];
   $('#proxyTestBody').innerHTML = rows.length ? rows.map(item => `

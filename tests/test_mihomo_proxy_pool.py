@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from webui.mihomo_proxy_pool import read_proxy_pool, update_proxy_pool
+from webui.mihomo_proxy_pool import read_proxy_pool, test_proxy_pool as run_proxy_pool, update_proxy_pool
 
 
 CONFIG = """\
@@ -103,3 +103,29 @@ def test_rejects_invalid_proxy_urls(tmp_path: Path, url: str):
     with patch.dict(os.environ, {"MIHOMO_CONFIG_PATH": str(path)}):
         with pytest.raises(ValueError):
             update_proxy_pool("jp", [url])
+
+
+def test_proxy_test_retries_only_initial_failures(monkeypatch):
+    calls = {"proxy-a": 0, "proxy-b": 0, "proxy-c": 0}
+
+    def fake_test(name, _timeout_ms):
+        calls[name] += 1
+        if name == "proxy-a" or (name == "proxy-b" and calls[name] > 1):
+            return {"name": name, "ok": True, "delay": 123, "error": ""}
+        return {"name": name, "ok": False, "delay": None, "error": "HTTP 504: Timeout"}
+
+    monkeypatch.setattr(
+        "webui.mihomo_proxy_pool.read_proxy_pool",
+        lambda _pool: {"names": ["proxy-a", "proxy-b", "proxy-c"]},
+    )
+    monkeypatch.setattr("webui.mihomo_proxy_pool._test_one", fake_test)
+    monkeypatch.setattr("webui.mihomo_proxy_pool.time.sleep", lambda _seconds: None)
+
+    result = run_proxy_pool("jp", timeout_ms=1000, workers=3)
+
+    assert calls == {"proxy-a": 1, "proxy-b": 2, "proxy-c": 2}
+    assert result["success"] == 2
+    assert result["failed"] == 1
+    assert result["retried"] == 2
+    assert result["recovered"] == 1
+    assert result["results"][1]["retried"] is True

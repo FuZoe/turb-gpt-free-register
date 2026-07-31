@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -333,6 +334,28 @@ def test_proxy_pool(pool_key: str, timeout_ms: int = 8000, workers: int = 24) ->
             result = future.result()
             result["index"] = index
             indexed_results[index] = result
+    # 大批代理通常共用同一个供应商网关。首轮高并发会让少数本来可用的
+    # 线路收到 Mihomo 503/504；等待片刻后仅以低并发重试失败项，避免把
+    # 网关瞬时拥塞误报成代理永久失效。
+    failed_indexes = [index for index, item in indexed_results.items() if not item["ok"]]
+    recovered = 0
+    if failed_indexes:
+        time.sleep(0.5)
+        retry_workers = max(1, min(8, len(failed_indexes)))
+        with ThreadPoolExecutor(max_workers=retry_workers) as executor:
+            retry_futures = {
+                executor.submit(_test_one, names[index - 1], timeout_ms): index
+                for index in failed_indexes
+            }
+            for future in as_completed(retry_futures):
+                index = retry_futures[future]
+                retry_result = future.result()
+                retry_result["index"] = index
+                retry_result["retried"] = True
+                if retry_result["ok"]:
+                    recovered += 1
+                indexed_results[index] = retry_result
+
     results = [indexed_results[index] for index in sorted(indexed_results)]
     success = sum(1 for item in results if item["ok"])
     delays = [int(item["delay"]) for item in results if item["ok"] and item["delay"] is not None]
@@ -341,6 +364,8 @@ def test_proxy_pool(pool_key: str, timeout_ms: int = 8000, workers: int = 24) ->
         "count": len(results),
         "success": success,
         "failed": len(results) - success,
+        "retried": len(failed_indexes),
+        "recovered": recovered,
         "average_delay": round(sum(delays) / len(delays)) if delays else None,
         "results": results,
     }
