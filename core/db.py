@@ -27,6 +27,8 @@ _LEGACY_DATA_DIR = _PROJECT_ROOT / "data"
 _LOG_DIR = _PROJECT_ROOT / "注册日志"
 _PLAN_CHECK_STALE_SECONDS = 120
 _PLAN_CHECK_QUEUE_STALE_SECONDS = 1800
+_TWOFA_TASK_STALE_SECONDS = 900
+_TWOFA_TASK_QUEUE_STALE_SECONDS = 3600
 
 _OUTLOOK_JSON = _PROJECT_ROOT / "用于注册的邮箱.json"
 _OUTLOOK_TXT = _PROJECT_ROOT / "用于注册的邮箱.txt"
@@ -838,6 +840,126 @@ def recover_interrupted_codex_agents() -> int:
         return recovered
 
 
+def claim_account_twofa_task(acc_id: int, trigger: str = "manual") -> bool:
+    """Atomically queue a 2FA enrollment task for an account without a local secret."""
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None or str(row.get("totp_secret") or "").strip():
+            return False
+        current_status = str(row.get("twofa_task_status") or "")
+        if current_status in {"queued", "running"}:
+            try:
+                stamp_key = "twofa_task_queued_at" if current_status == "queued" else "twofa_task_started_at"
+                stale_after = _TWOFA_TASK_QUEUE_STALE_SECONDS if current_status == "queued" else _TWOFA_TASK_STALE_SECONDS
+                started_at = datetime.fromisoformat(str(row.get(stamp_key) or ""))
+                if (datetime.now() - started_at).total_seconds() < stale_after:
+                    return False
+            except (TypeError, ValueError):
+                pass
+        now = _now()
+        row.update({
+            "twofa_task_status": "queued",
+            "twofa_task_ok": False,
+            "twofa_task_trigger": str(trigger or "manual"),
+            "twofa_task_queued_at": now,
+            "twofa_task_started_at": None,
+            "twofa_task_completed_at": None,
+            "twofa_task_error": None,
+            "twofa_task_message": "创建 2FA 任务已排队",
+            "updated_at": now,
+        })
+        _save_accounts(accounts)
+        return True
+
+
+def mark_account_twofa_task_running(acc_id: int) -> bool:
+    """Mark a queued 2FA task as running."""
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None or row.get("twofa_task_status") not in {"queued", "running"}:
+            return False
+        now = _now()
+        row.update({
+            "twofa_task_status": "running",
+            "twofa_task_started_at": now,
+            "twofa_task_error": None,
+            "twofa_task_message": "正在登录账号并创建 2FA",
+            "updated_at": now,
+        })
+        _save_accounts(accounts)
+        return True
+
+
+def update_account_twofa_task(acc_id: int, result: dict | None = None) -> bool:
+    """Persist 2FA task progress and synchronize a successful TOTP secret."""
+    result = result or {}
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None:
+            return False
+        status = str(result.get("status") or ("success" if result.get("ok") else "failed"))
+        secret = str(result.get("totp_secret") or "").strip()
+        ok = bool(result.get("ok")) and status == "success" and bool(secret or row.get("totp_secret"))
+        if status == "success" and not ok:
+            status = "failed"
+        now = _now()
+        row.update({
+            "twofa_task_status": status,
+            "twofa_task_ok": ok,
+            "twofa_task_checked_at": result.get("checked_at") or now,
+            "twofa_task_error": None if ok or status == "running" else result.get("error"),
+            "twofa_task_message": result.get("message") or ("2FA 已创建" if ok else "创建 2FA 失败"),
+            "updated_at": now,
+        })
+        if status in {"success", "failed", "stopped"}:
+            row["twofa_task_completed_at"] = now
+        if result.get("proxy_used") is not None:
+            row["twofa_task_proxy_used"] = result.get("proxy_used")
+        if ok and secret:
+            row["totp_secret"] = secret
+        _save_accounts(accounts)
+
+        if ok and secret:
+            email = str(row.get("email") or "").lower()
+            outlook_rows = _load_outlook()
+            outlook_row = _find_by_email(outlook_rows, email)
+            if outlook_row is not None:
+                outlook_row["totp_secret"] = secret
+                _save_outlook(outlook_rows)
+            generic_rows = _load_generic_api_emails()
+            generic_row = _find_by_email(generic_rows, email)
+            if generic_row is not None:
+                generic_row["totp_secret"] = secret
+                _save_generic_api_emails(generic_rows)
+        return True
+
+
+def recover_interrupted_twofa_tasks() -> int:
+    """Mark queued/running 2FA tasks as failed after a WebUI restart."""
+    with _LOCK:
+        accounts = _load_accounts()
+        recovered = 0
+        now = _now()
+        for row in accounts:
+            if row.get("twofa_task_status") not in {"queued", "running"}:
+                continue
+            row.update({
+                "twofa_task_status": "failed",
+                "twofa_task_ok": False,
+                "twofa_task_error": "WebUI 重启导致创建 2FA 任务中断，请重新提交",
+                "twofa_task_message": "创建 2FA 任务已中断",
+                "twofa_task_completed_at": now,
+                "updated_at": now,
+            })
+            recovered += 1
+        if recovered:
+            _save_accounts(accounts)
+        return recovered
+
+
 def claim_account_plan_check(
     acc_id: int | None = None,
     email: str | None = None,
@@ -1147,6 +1269,9 @@ def list_account_plan_check_statuses(limit: int = 5000, offset: int = 0, archive
         "codex_agent_status", "codex_agent_message",
         "codex_agent_runtime_id", "codex_agent_sub2api_url",
         "codex_agent_sub2api_mode", "codex_agent_sub2api_total",
+        "twofa_task_status", "twofa_task_ok", "twofa_task_message", "twofa_task_error",
+        "twofa_task_trigger", "twofa_task_queued_at", "twofa_task_started_at",
+        "twofa_task_completed_at", "twofa_task_proxy_used",
     )
     with _LOCK:
         all_rows = _filtered_decorated_accounts(archived=archived, plan_filter=plan_filter, q=q)
@@ -1169,6 +1294,7 @@ def list_account_plan_check_statuses(limit: int = 5000, offset: int = 0, archive
                     item.pop(expire_key, None)
             item["codex_agent_has_token"] = bool(str(row.get("codex_agent_token") or "").strip())
             item["has_access_token"] = bool(str(row.get("access_token") or "").strip())
+            item["totp_enabled"] = bool(str(row.get("totp_secret") or "").strip())
             items.append(item)
         latest = max((str(row.get("updated_at") or "") for row in all_rows), default="")
         # updated_at 目前只有秒级精度；一次快速查询可能在同一秒内完成
@@ -1188,6 +1314,8 @@ def list_account_plan_check_statuses(limit: int = 5000, offset: int = 0, archive
                     "extract_link_status": row.get("extract_link_status"),
                     "codex_status": row.get("codex_status"),
                     "codex_agent_status": row.get("codex_agent_status"),
+                    "twofa_task_status": row.get("twofa_task_status"),
+                    "totp_enabled": bool(str(row.get("totp_secret") or "").strip()),
                 }
                 for row in all_rows
             ],

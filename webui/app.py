@@ -18,7 +18,14 @@ from urllib.parse import urlparse
 
 from flask import Flask, Response, jsonify, render_template, request
 
-from core import codex_retry_service, db, plan_check_service, extract_link_service, codex_agent_service
+from core import (
+    codex_agent_service,
+    codex_retry_service,
+    db,
+    extract_link_service,
+    plan_check_service,
+    twofa_task_service,
+)
 from webui.auth import can_manage_shared_proxies, configured_tenants, init_auth, register_auth_routes
 from core import registration_service as svc
 from core.tenant_context import current_tenant, tenant_scope
@@ -96,6 +103,7 @@ def _compact_account_for_list(row: dict) -> dict:
         "user_name", "email_source", "note", "archived", "created_at",
         "plan_type", "current_plan_type", "plus_trial_eligible",
         "plan_check_status", "codex_status", "codex_agent_status",
+        "twofa_task_status",
     ):
         if key in row:
             out[key] = row.get(key)
@@ -116,6 +124,7 @@ def _compact_account_for_list(row: dict) -> dict:
         # Codex / Agent 状态提示。
         "codex_error", "codex_agent_message", "codex_agent_runtime_id",
         "codex_agent_sub2api_url", "codex_agent_sub2api_mode", "codex_agent_sub2api_total",
+        "twofa_task_message", "twofa_task_error", "twofa_task_proxy_used",
     )
     for key in optional_keys:
         value = row.get(key)
@@ -224,7 +233,8 @@ def create_app(auth_code: str | None = None) -> Flask:
             recovered_plan_checks = db.recover_interrupted_plan_checks()
             recovered_extract_links = db.recover_interrupted_extract_links()
             recovered_codex_agents = db.recover_interrupted_codex_agents()
-            recovered_total = recovered_jobs + recovered_plan_checks + recovered_extract_links + recovered_codex_agents
+            recovered_twofa_tasks = db.recover_interrupted_twofa_tasks()
+            recovered_total = recovered_jobs + recovered_plan_checks + recovered_extract_links + recovered_codex_agents + recovered_twofa_tasks
             if recovered_total:
                 logger.warning("租户 %s 启动时已恢复 %s 个中断状态", tenant_id, recovered_total)
 
@@ -523,6 +533,87 @@ def create_app(auth_code: str | None = None) -> Flask:
         if not queued.get("accepted"):
             return jsonify({"ok": False, **queued}), 503
         return jsonify({"ok": True, "started": True, **queued}), 202
+
+    @app.post("/api/accounts/create-2fa")
+    def api_account_create_twofa():
+        """Queue TOTP enrollment for one existing account. Body {account_id|id}."""
+        data = request.get_json(silent=True) or {}
+        acc_id = data.get("account_id") or data.get("id")
+        try:
+            acc = db.get_account(int(acc_id))
+        except Exception:
+            acc = None
+        if not acc:
+            return jsonify({"ok": False, "error": "账号不存在"}), 404
+        if str(acc.get("totp_secret") or "").strip():
+            return jsonify({"ok": False, "error": "该账号已经启用 2FA"}), 409
+        queued = twofa_task_service.enqueue_account_twofa(
+            account_id=int(acc["id"]),
+            email=str(acc.get("email") or ""),
+            trigger="manual",
+        )
+        if queued.get("busy"):
+            return jsonify({"ok": False, **queued}), 409
+        if not queued.get("accepted"):
+            return jsonify({"ok": False, **queued}), 503
+        return jsonify({"ok": True, "started": True, **queued}), 202
+
+    @app.post("/api/accounts/create-2fa-bulk")
+    def api_accounts_create_twofa_bulk():
+        """Queue TOTP enrollment for selected accounts. Body {account_ids:[...]}"""
+        data = request.get_json(silent=True) or {}
+        ids = data.get("account_ids") or data.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            return jsonify({"ok": False, "error": "account_ids 必须是非空数组"}), 400
+        if len(ids) > 500:
+            return jsonify({"ok": False, "error": "单次最多提交 500 个账号"}), 400
+
+        started = []
+        busy = []
+        failed = []
+        skipped = []
+        seen = set()
+        for raw in ids:
+            try:
+                acc_id = int(raw)
+            except Exception:
+                skipped.append({"id": raw, "reason": "ID 非法"})
+                continue
+            if acc_id in seen:
+                continue
+            seen.add(acc_id)
+            acc = db.get_account(acc_id)
+            if not acc:
+                skipped.append({"id": acc_id, "reason": "账号不存在"})
+                continue
+            email = str(acc.get("email") or "")
+            if str(acc.get("totp_secret") or "").strip():
+                skipped.append({"id": acc_id, "email": email, "reason": "2FA 已启用"})
+                continue
+            queued = twofa_task_service.enqueue_account_twofa(
+                account_id=acc_id,
+                email=email,
+                trigger="manual_bulk",
+            )
+            item = {"id": acc_id, "email": email, **queued}
+            if queued.get("accepted"):
+                started.append(item)
+            elif queued.get("busy"):
+                busy.append(item)
+            else:
+                failed.append(item)
+        return jsonify({
+            "ok": True,
+            "started": started,
+            "started_count": len(started),
+            "busy": busy,
+            "busy_count": len(busy),
+            "failed": failed,
+            "failed_count": len(failed),
+            "skipped": skipped,
+            "skipped_count": len(skipped),
+            "queue": twofa_task_service.queue_settings(),
+        }), 202
 
     @app.post("/api/accounts/check-plan-bulk")
     def api_accounts_check_plan_bulk():

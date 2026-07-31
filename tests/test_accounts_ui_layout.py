@@ -23,3 +23,13 @@ def test_accounts_txt_uses_email_password_totp_credentials_line():
     assert "accounts-password-2fa-" in text
     assert ">复制AT</button>" in text
     assert "data-account-show-agent-token" in text
+
+
+def test_accounts_ui_exposes_queued_twofa_automation():
+    text = TEMPLATE.read_text(encoding="utf-8")
+
+    assert 'id="btnCreateSelected2FA"' in text
+    assert 'data-create-twofa=' in text
+    assert '/api/accounts/create-2fa' in text
+    assert '2FA排队' in text
+    assert '创建2FA中' in text

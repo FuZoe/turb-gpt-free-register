@@ -257,10 +257,14 @@ def _maybe_auto_retry_cloudflare(job_id: int, error: object) -> dict | None:
     return result
 
 
-def _run_registration_with_global_slot(tenant_id: str, func, *args) -> Any:
+def run_with_global_browser_slot(tenant_id: str, func, *args) -> Any:
     """Run one browser lifecycle under the hard process-wide concurrency cap."""
     with _GLOBAL_REGISTRATION_SLOTS:
         return run_for_tenant(tenant_id, func, *args)
+
+
+# Backward-compatible internal name used by existing registration submissions.
+_run_registration_with_global_slot = run_with_global_browser_slot
 
 
 def _disable_job_email(email: str | None, reason: str) -> bool:

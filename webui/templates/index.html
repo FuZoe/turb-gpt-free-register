@@ -274,7 +274,7 @@
     .accounts-table .col-email { width: 250px; }
     .accounts-table .col-plan { width: 260px; }
     .accounts-table .col-note { width: 110px; }
-    .accounts-table .col-small { width: 130px; }
+    .accounts-table .col-small { width: 158px; }
     .accounts-table .col-status { width: 88px; }
     .accounts-table .col-actions { width: 570px; }
     .accounts-table .main-cell { font-size: 12px; }
@@ -548,6 +548,10 @@
             <button class="btn good" id="btnGenerateSelectedAgent" disabled title="给选中的已注册账号批量生成 Codex Agent Token">生成</button>
             <button class="btn good" id="btnDownloadSelectedAgent" disabled title="下载选中账号已生成的 Codex Agent Token，打包 ZIP">下载</button>
             <button class="btn good" id="btnUploadSelectedAgentSub2" disabled title="把选中账号已生成的 Codex Agent Token 上传到 sub2api">上传sub2</button>
+          </div>
+          <div class="btn-group">
+            <span class="btn-group-title">自动任务</span>
+            <button class="btn good" id="btnCreateSelected2FA" disabled title="为选中且尚未启用 2FA 的账号创建排队任务">创建2FA</button>
           </div>
           <div class="btn-group">
             <span class="btn-group-title">Codex</span>
@@ -1383,9 +1387,12 @@ async function pollAccountPlanStatuses() {
         const isExtracting = ['queued', 'running'].includes(item.extract_link_status);
         const wasAgenting = ['queued', 'running'].includes(account?.codex_agent_status);
         const isAgenting = ['queued', 'running'].includes(item.codex_agent_status);
+        const wasCreatingTwofa = ['queued', 'running'].includes(account?.twofa_task_status);
+        const isCreatingTwofa = ['queued', 'running'].includes(item.twofa_task_status);
         if (wasChecking && !isChecking) needsFullReload = true;
         if (wasExtracting && !isExtracting) needsFullReload = true;
         if (wasAgenting && !isAgenting) needsFullReload = true;
+        if (wasCreatingTwofa && !isCreatingTwofa) needsFullReload = true;
         Object.assign(account, item);
       });
       planStatusRevision = snapshot.revision || '';
@@ -1426,6 +1433,17 @@ function _codexAgentCell(r) {
   const gen = r.has_access_token ? `<button data-codex-agent="${esc(r.id)}" title="生成 Codex CLI agent_identity auth.json/token">生成Agent</button>` : '';
   if (s === 'failed') return `<div class="agent-token-cell"><span class="pill status-failed" title="${title}">失败</span>${gen}</div>`;
   return gen ? `<div class="agent-token-cell">${gen}</div>` : '<span class="muted">-</span>';
+}
+function _twofaTaskCell(r) {
+  if (r.totp_enabled) return '<span class="pill status-success">2FA已启用</span>';
+  const status = r.twofa_task_status || '';
+  const message = r.twofa_task_message || '';
+  const error = r.twofa_task_error || '';
+  if (status === 'queued') return `<span class="pill status-running" title="${esc(message || '任务正在排队')}">2FA排队</span>`;
+  if (status === 'running') return `<span class="pill status-running" title="${esc(message || '正在创建 2FA')}">创建2FA中</span>`;
+  const label = status === 'failed' ? '重试2FA' : '创建2FA';
+  const failed = status === 'failed' ? `<span class="pill status-failed" title="${esc(error || message || '创建失败')}">2FA失败</span>` : '<span class="muted">2FA未启用</span>';
+  return `${failed}<button class="good" data-create-twofa="${esc(r.id)}" title="${esc(error ? '重新创建；上次失败：' + error : '登录该账号并自动收取两封邮箱 OTP，创建并保存 TOTP')}">${label}</button>`;
 }
 function _fmtPlanTime(v, dateOnly = false) {
   if (!v) return '';
@@ -1587,7 +1605,7 @@ function renderAccounts() {
       <td><div class="main-cell">${esc(r.email)}${r.archived ? ' <span class="pill status-used" title="该账号已归档">归档</span>' : ''}</div><div class="sub-cell">${esc(r.user_name || '-')}</div></td>
       <td>${_planCell(r)}<div class="sub-cell">${_extractLinkCell(r)}</div></td>
       <td class="wrap" title="${esc(r.note || '')}">${r.note ? esc(short(r.note, 40)) : '<span class="muted">-</span>'}</td>
-      <td><div class="account-secret-cell">${r.has_registration_password ? `<button data-account-show-password="${esc(r.id)}" data-account-email="${esc(r.email)}">查看密码</button>` : '<span class="muted">无密码</span>'}<span>${r.totp_enabled ? '2FA已启用' : '<span class="muted">2FA未启用</span>'}</span></div></td>
+      <td><div class="account-secret-cell">${r.has_registration_password ? `<button data-account-show-password="${esc(r.id)}" data-account-email="${esc(r.email)}">查看密码</button>` : '<span class="muted">无密码</span>'}<span class="account-twofa-task">${_twofaTaskCell(r)}</span></div></td>
       <td>${_codexCell(r)}</td>
       <td class="actions actions-cell">
         <div class="account-row-actions">
@@ -1613,6 +1631,7 @@ function updateAccountSelectionUi(pageRows = null) {
   const generateAgentBtn = $('#btnGenerateSelectedAgent');
   const downloadAgentBtn = $('#btnDownloadSelectedAgent');
   const uploadAgentSub2Btn = $('#btnUploadSelectedAgentSub2');
+  const createTwofaBtn = $('#btnCreateSelected2FA');
   const checkPlanBtn = $('#btnCheckSelectedPlans');
   const copySelectedBtn = $('#btnCopySelectedLines');
   const downloadTxtBtn = $('#btnDownloadSelectedTxt');
@@ -1627,6 +1646,7 @@ function updateAccountSelectionUi(pageRows = null) {
   if (generateAgentBtn) generateAgentBtn.disabled = ACCOUNT_SELECTED.size === 0;
   if (downloadAgentBtn) downloadAgentBtn.disabled = ACCOUNT_SELECTED.size === 0;
   if (uploadAgentSub2Btn) uploadAgentSub2Btn.disabled = ACCOUNT_SELECTED.size === 0;
+  if (createTwofaBtn) createTwofaBtn.disabled = ACCOUNT_SELECTED.size === 0;
   if (checkPlanBtn) checkPlanBtn.disabled = ACCOUNT_SELECTED.size === 0;
   if (copySelectedBtn) copySelectedBtn.disabled = ACCOUNT_SELECTED.size === 0;
   if (downloadTxtBtn) downloadTxtBtn.disabled = ACCOUNT_SELECTED.size === 0;
@@ -1717,6 +1737,12 @@ $('#accountsBody').addEventListener('click', async (e) => {
   const planBtn = e.target.closest('[data-plan-check]');
   if (planBtn) {
     await checkOnePlan(Number(planBtn.dataset.planCheck), planBtn);
+    return;
+  }
+
+  const createTwofaBtn = e.target.closest('[data-create-twofa]');
+  if (createTwofaBtn) {
+    await createOneTwofa(Number(createTwofaBtn.dataset.createTwofa), createTwofaBtn);
     return;
   }
 
@@ -1856,6 +1882,7 @@ $('#btnExtractSelectedLinks').addEventListener('click', extractSelectedLinks);
 $('#btnGenerateSelectedAgent').addEventListener('click', generateSelectedCodexAgents);
 $('#btnDownloadSelectedAgent').addEventListener('click', downloadSelectedCodexAgents);
 $('#btnUploadSelectedAgentSub2').addEventListener('click', uploadSelectedCodexAgentSub2);
+$('#btnCreateSelected2FA').addEventListener('click', createSelectedTwofa);
 $('#btnRetrySelectedCodex').addEventListener('click', retrySelectedCodex);
 $('#btnDownloadSelectedCpa').addEventListener('click', downloadSelectedCpa);
 $('#btnStopSelectedCodex').addEventListener('click', stopSelectedCodex);
@@ -1997,6 +2024,57 @@ async function checkOnePlan(id, btn) {
     showToast(err.message);
     await pollAccountPlanStatuses();
     btn.disabled = false;
+    btn.textContent = old;
+  }
+}
+
+async function createOneTwofa(id, btn) {
+  const acc = ACCOUNTS.find(a => Number(a.id) === Number(id));
+  if (!acc) { showToast('账号不存在'); return; }
+  if (acc.totp_enabled) { showToast('该账号已经启用 2FA'); return; }
+  if (!confirm(`确定为该账号创建 2FA 吗？\n\n${acc.email || ('#' + id)}\n\n任务会排队执行，并自动收取登录 OTP 和 2FA 重认证 OTP。`)) return;
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '入队中…';
+  try {
+    await api('/api/accounts/create-2fa', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({account_id: id}),
+    });
+    showToast('创建 2FA 任务已入队');
+    await pollAccountPlanStatuses();
+  } catch(err) {
+    showToast('创建 2FA 失败: ' + err.message);
+    btn.disabled = false;
+    btn.textContent = old;
+  }
+}
+
+async function createSelectedTwofa() {
+  const ids = Array.from(ACCOUNT_SELECTED);
+  if (ids.length === 0) { showToast('请先选择账号'); return; }
+  const selected = ids.map(id => ACCOUNTS.find(a => Number(a.id) === Number(id))).filter(Boolean);
+  const eligible = selected.filter(a => !a.totp_enabled && !['queued','running'].includes(a.twofa_task_status));
+  if (!eligible.length) { showToast('选中账号均已启用 2FA 或任务正在执行'); return; }
+  if (!confirm(`确定为选中的 ${eligible.length} 个账号创建 2FA 吗？\n\n任务会进入队列逐个执行；已启用或正在执行的账号会自动跳过。`)) return;
+  const btn = $('#btnCreateSelected2FA');
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '入队中…';
+  try {
+    const r = await api('/api/accounts/create-2fa-bulk', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({account_ids: ids}),
+    });
+    const skipped = (r.skipped_count || 0) + (r.busy_count || 0) + (r.failed_count || 0);
+    showToast(skipped ? `已入队 ${r.started_count || 0} 个，跳过/失败 ${skipped} 个` : `已入队 ${r.started_count || 0} 个`);
+    await pollAccountPlanStatuses();
+  } catch(err) {
+    showToast('批量创建 2FA 失败: ' + err.message);
+    updateAccountSelectionUi();
+  } finally {
     btn.textContent = old;
   }
 }
