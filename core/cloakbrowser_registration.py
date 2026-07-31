@@ -22,6 +22,7 @@ from core.roxy_registration import (  # noqa: F401
     _open_signup_password_from_otp,
     _clear_otp_inputs, _type_otp, _click_continue, _wait_after_email_otp_submit,
     _click_resend_email_otp, _complete_profile_page, _fetch_chatgpt_session, _check_manual_stop,
+    is_cloudflare_challenge_error,
 )
 
 logger = logging.getLogger(__name__)
@@ -236,6 +237,15 @@ def _run_cloak_registration_impl(email: str, name: str, birthday: str, proxy: st
         }
     except Exception as exc:
         logger.error("[Cloak注册] 失败：%s: %s", type(exc).__name__, exc)
+        if is_cloudflare_challenge_error(exc):
+            used_proxy = ((opened.raw or {}).get("proxy") if opened else None) or proxy or None
+            try:
+                from config.proxy import mark_proxy_temporarily_bad
+
+                mark_proxy_temporarily_bad(used_proxy, ttl_seconds=900)
+                logger.warning("[Cloak注册] Cloudflare 线路已冷却 15 分钟：%s", used_proxy)
+            except Exception:
+                logger.debug("[Cloak注册] 标记 Cloudflare 线路冷却失败", exc_info=True)
         logger.debug("[Cloak注册] 失败详情", exc_info=True)
         _capture_cloak_failure_diagnostics(driver, batch_dir=batch_dir)
         try:

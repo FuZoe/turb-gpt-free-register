@@ -10,6 +10,7 @@
     → 创建 5 个任务，丢入线程池，立即返回 [job_dict, ...]
 """
 import logging
+import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -183,6 +184,39 @@ def _should_disable_failed_registration_email(error: object) -> bool:
         or "auth.openai.com/log-in/password" in text
         or "/log-in/password" in text
     )
+
+
+def _is_cloudflare_challenge_failure(error: object) -> bool:
+    text = str(error or "").lower()
+    return "cloudflarechallengeerror" in text or "cloudflare challenge/403" in text
+
+
+def _maybe_auto_retry_cloudflare(job_id: int, error: object) -> dict | None:
+    """Cloudflare 拦截时自动创建子任务，让下一次随机选择另一固定出口。"""
+    if not _is_cloudflare_challenge_failure(error):
+        return None
+    source = db.get_job(int(job_id)) or {}
+    try:
+        max_retries = max(0, min(10, int(os.getenv("REGISTRATION_CF_AUTO_RETRIES", "3") or 3)))
+    except (TypeError, ValueError):
+        max_retries = 3
+    attempt = int(source.get("retry_attempt") or 0)
+    if attempt >= max_retries:
+        message = f"Cloudflare 自动换线路已达到 {max_retries} 次上限"
+        _append_job_log(job_id, message, source="cloudflare-retry")
+        logger.warning("[Job %s] %s", job_id, message)
+        return {"ok": False, "created": False, "error": message}
+    result = retry_job(job_id, workers=get_executor_workers())
+    child = (result or {}).get("job") or {}
+    if result.get("ok"):
+        message = f"检测到 Cloudflare 403，已自动冷却当前线路并创建换线路任务 #{child.get('id')}（{attempt + 1}/{max_retries}）"
+        _append_job_log(job_id, message, source="cloudflare-retry")
+        if child.get("id"):
+            _append_job_log(int(child["id"]), f"由任务 #{job_id} 遇到 Cloudflare 403 自动换线路", source="cloudflare-retry")
+        logger.warning("[Job %s] %s", job_id, message)
+    else:
+        logger.error("[Job %s] Cloudflare 自动换线路任务创建失败：%s", job_id, result.get("error"))
+    return result
 
 
 def _disable_job_email(email: str | None, reason: str) -> bool:
@@ -393,6 +427,7 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                 else:
                     _release_unconsumed_job_email(email_to_handle, str(err))
                 log_logger.error(f"[Job {job_id}] 失败: {err}")
+                _maybe_auto_retry_cloudflare(job_id, err)
     except StopRequested as exc:
         _release_unconsumed_job_email(email, str(exc))
         log_logger.warning(f"[Job {job_id}] 已停止: {exc}")
@@ -424,6 +459,7 @@ def _run_one_job(job_id: int, log_file: str) -> None:
             error=f"{type(exc).__name__}: {exc}"[:500],
             completed_at=datetime.now().isoformat(timespec="seconds"),
         )
+        _maybe_auto_retry_cloudflare(job_id, err_text)
     finally:
         _deactivate_job(job_id)
 

@@ -153,6 +153,43 @@ _EMAIL_INPUT_SELECTORS = [
 ]
 
 
+class CloudflareChallengeError(RuntimeError):
+    """OpenAI auth flow was replaced by a Cloudflare verification page."""
+
+
+def _is_cloudflare_challenge_state(state: dict | None) -> bool:
+    state = state or {}
+    url = str(state.get('url') or '').lower()
+    text = ' '.join((
+        str(state.get('title') or ''),
+        str(state.get('text') or ''),
+    )).lower()
+    return (
+        '/cdn-cgi/challenge' in url
+        or 'challenges.cloudflare.com' in url
+        or 'ray id:' in text
+        or ('cloudflare' in text and any(x in text for x in ('security', 'verify', 'challenge', '検証', '验证')))
+        or any(x in text for x in (
+            'security verification', 'performing security verification',
+            'セキュリティ検証', 'しばらくお待ちください',
+            '安全验证', '安全性验证', '正在验证',
+        ))
+    )
+
+
+def is_cloudflare_challenge_error(error: object) -> bool:
+    text = str(error or '').lower()
+    return 'cloudflarechallengeerror' in text or 'cloudflare challenge/403' in text
+
+
+def _raise_if_cloudflare_challenge(driver, state: dict | None = None) -> None:
+    state = state or _email_entry_state(driver)
+    if _is_cloudflare_challenge_state(state):
+        raise CloudflareChallengeError(
+            f"Cloudflare challenge/403 阻断认证页: url={state.get('url')} title={state.get('title')}"
+        )
+
+
 def _email_entry_state(driver) -> dict:
     try:
         return driver.execute_script(r"""
@@ -171,7 +208,7 @@ def _email_entry_state(driver) -> dict:
         })).slice(0, 30);
         const actions = [...document.querySelectorAll('button,a,[role=button],input[type=button],input[type=submit]')]
           .filter(visible).map(el => ({tag: el.tagName, type: el.getAttribute('type') || '', attrs: attrText(el)})).slice(0, 40);
-        return {url: location.href, title: document.title, inputs, actions};
+        return {url: location.href, title: document.title, text: (document.body?.innerText || '').slice(0, 1600), inputs, actions};
         """) or {}
     except Exception as exc:
         return {"url": getattr(driver, "current_url", ""), "error": f"{type(exc).__name__}: {exc}"}
@@ -288,6 +325,7 @@ def _type_email_address(driver, email: str, timeout: int | None = None) -> None:
             _set_element_value(driver, el, email)
             return
         last_state = _email_entry_state(driver)
+        _raise_if_cloudflare_challenge(driver, last_state)
         if not clicked_email_option and _click_email_entry_option(driver):
             clicked_email_option = True
             time.sleep(1.0)
@@ -434,6 +472,7 @@ def _wait_email_submit_next_state(driver, email: str, timeout: int = 18) -> str:
     cleared_last_log_at = 0.0
     expected_email = str(email or "").strip().lower()
     while time.time() < end:
+        _raise_if_cloudflare_challenge(driver)
         terminal_state = _email_submit_terminal_state(driver)
         if terminal_state:
             return terminal_state

@@ -79,3 +79,21 @@ def test_access_token_probe_skips_cross_origin_auth_page():
             raise AssertionError("auth.openai.com 上不应跨域读取 ChatGPT session")
 
     assert reg._has_access_token(Driver()) is False
+
+
+@pytest.mark.parametrize("state", [
+    {
+        "url": "https://auth.openai.com/api/accounts/authorize",
+        "title": "しばらくお待ちください...",
+        "text": "セキュリティ検証の実行 Ray ID: abc123 Cloudflare",
+    },
+    {
+        "url": "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/turnstile",
+        "title": "Just a moment",
+        "text": "Performing security verification",
+    },
+])
+def test_detects_cloudflare_challenge_in_localized_pages(state):
+    assert reg._is_cloudflare_challenge_state(state) is True
+    with pytest.raises(reg.CloudflareChallengeError, match="Cloudflare challenge/403"):
+        reg._raise_if_cloudflare_challenge(None, state)
