@@ -3085,7 +3085,7 @@ $('#btnTestProxyPool').addEventListener('click', async () => {
   }
   const button = $('#btnTestProxyPool');
   button.disabled = true;
-  $('#proxyTestSummary').textContent = `正在并发检测 ${pool.count} 条代理，请稍候...`;
+  $('#proxyTestSummary').textContent = `正在排队检测 ${pool.count} 条代理，每次最多 5 条，请稍候...`;
   $('#proxyTestBody').innerHTML = '<tr><td colspan="5" class="muted">检测进行中...</td></tr>';
   try {
     const response = await api('/api/proxy-manager/test', {

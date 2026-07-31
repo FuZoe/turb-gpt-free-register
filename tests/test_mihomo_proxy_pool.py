@@ -1,4 +1,6 @@
 import os
+import threading
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -129,3 +131,31 @@ def test_proxy_test_retries_only_initial_failures(monkeypatch):
     assert result["retried"] == 2
     assert result["recovered"] == 1
     assert result["results"][1]["retried"] is True
+
+
+def test_proxy_test_queues_at_most_five_concurrent_checks(monkeypatch):
+    state = {"active": 0, "peak": 0}
+    lock = threading.Lock()
+    names = [f"proxy-{index}" for index in range(12)]
+
+    def fake_test(name, _timeout_ms):
+        with lock:
+            state["active"] += 1
+            state["peak"] = max(state["peak"], state["active"])
+        time.sleep(0.02)
+        with lock:
+            state["active"] -= 1
+        return {"name": name, "ok": True, "delay": 100, "error": ""}
+
+    monkeypatch.setattr(
+        "webui.mihomo_proxy_pool.read_proxy_pool",
+        lambda _pool: {"names": names},
+    )
+    monkeypatch.setattr("webui.mihomo_proxy_pool._test_one", fake_test)
+
+    result = run_proxy_pool("jp", timeout_ms=1000, workers=24)
+
+    assert state["peak"] == 5
+    assert result["concurrency"] == 5
+    assert result["success"] == 12
+    assert result["failed"] == 0

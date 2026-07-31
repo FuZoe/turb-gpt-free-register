@@ -21,6 +21,7 @@ from urllib.request import Request, urlopen
 DEFAULT_CONFIG_PATH = Path.home() / ".config" / "mihomo" / "config.yaml"
 DEFAULT_CONTROLLER = "http://127.0.0.1:9090"
 TEST_URL = "https://www.gstatic.com/generate_204"
+MAX_TEST_CONCURRENCY = 5
 
 POOL_DEFINITIONS = {
     "jp": {
@@ -322,7 +323,7 @@ def test_proxy_pool(pool_key: str, timeout_ms: int = 8000, workers: int = 24) ->
     pool = read_proxy_pool(pool_key)
     names = list(pool["names"])
     timeout_ms = max(1000, min(int(timeout_ms), 30000))
-    workers = max(1, min(int(workers), 32, len(names) or 1))
+    workers = max(1, min(int(workers), MAX_TEST_CONCURRENCY, len(names) or 1))
     indexed_results: dict[int, dict[str, object]] = {}
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {
@@ -341,7 +342,7 @@ def test_proxy_pool(pool_key: str, timeout_ms: int = 8000, workers: int = 24) ->
     recovered = 0
     if failed_indexes:
         time.sleep(0.5)
-        retry_workers = max(1, min(8, len(failed_indexes)))
+        retry_workers = max(1, min(MAX_TEST_CONCURRENCY, len(failed_indexes)))
         with ThreadPoolExecutor(max_workers=retry_workers) as executor:
             retry_futures = {
                 executor.submit(_test_one, names[index - 1], timeout_ms): index
@@ -364,6 +365,7 @@ def test_proxy_pool(pool_key: str, timeout_ms: int = 8000, workers: int = 24) ->
         "count": len(results),
         "success": success,
         "failed": len(results) - success,
+        "concurrency": workers,
         "retried": len(failed_indexes),
         "recovered": recovered,
         "average_delay": round(sum(delays) / len(delays)) if delays else None,
