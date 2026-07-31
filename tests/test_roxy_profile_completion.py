@@ -97,3 +97,21 @@ def test_detects_cloudflare_challenge_in_localized_pages(state):
     assert reg._is_cloudflare_challenge_state(state) is True
     with pytest.raises(reg.CloudflareChallengeError, match="Cloudflare challenge/403"):
         reg._raise_if_cloudflare_challenge(None, state)
+
+
+def test_detects_hidden_cloudflare_403_from_auth_network_requests():
+    class Driver:
+        current_url = "https://chatgpt.com/auth/login"
+
+        @staticmethod
+        def diagnostic_snapshot():
+            return {
+                "page": {"url": "https://chatgpt.com/auth/login"},
+                "http_errors": [
+                    {"status": 403, "url": "https://chatgpt.com/backend-anon/me"},
+                    {"status": 403, "url": "https://chatgpt.com/api/auth/signin/openai"},
+                ],
+            }
+
+    with pytest.raises(reg.CloudflareChallengeError, match="阻断认证请求"):
+        reg._raise_if_cloudflare_network_failure(Driver())

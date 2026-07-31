@@ -188,6 +188,39 @@ def _raise_if_cloudflare_challenge(driver, state: dict | None = None) -> None:
         raise CloudflareChallengeError(
             f"Cloudflare challenge/403 阻断认证页: url={state.get('url')} title={state.get('title')}"
         )
+    _raise_if_cloudflare_network_failure(driver)
+
+
+def _raise_if_cloudflare_network_failure(driver) -> None:
+    """识别页面未显示验证文案、但关键认证请求已被 403 冻结的场景。"""
+    snapshot_fn = getattr(driver, 'diagnostic_snapshot', None)
+    if not callable(snapshot_fn):
+        return
+    try:
+        snapshot = snapshot_fn() or {}
+    except Exception:
+        return
+    errors = snapshot.get('http_errors') or []
+    blocked = []
+    critical_paths = (
+        '/api/auth/signin/openai',
+        '/api/accounts/authorize',
+        '/backend-anon/me',
+        '/cdn-cgi/challenge-platform/',
+    )
+    for item in errors:
+        url = str(item.get('url') or '')
+        try:
+            status = int(item.get('status') or 0)
+        except (TypeError, ValueError):
+            status = 0
+        if status == 403 and any(path in url for path in critical_paths):
+            blocked.append(url)
+    if blocked:
+        current = str((snapshot.get('page') or {}).get('url') or getattr(driver, 'current_url', '') or '')
+        raise CloudflareChallengeError(
+            f"Cloudflare challenge/403 阻断认证请求: page={current} blocked={blocked[-3:]}"
+        )
 
 
 def _email_entry_state(driver) -> dict:
