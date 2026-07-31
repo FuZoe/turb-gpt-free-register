@@ -171,7 +171,7 @@ def _run_cloak_registration_impl(email: str, name: str, birthday: str, proxy: st
                     "message": f"{type(exc).__name__}: {str(exc)[:220]}",
                 }
                 logger.error("[Cloak注册][2FA] 设置失败：%s", twofa_result["message"], exc_info=True)
-                raise RuntimeError(f"Cloak 2FA 设置失败：{twofa_result['message']}") from exc
+                logger.warning("[Cloak注册][2FA] 账号注册已完成，保留账号并记录 2FA 失败，后续可单独补设")
 
         codex_result = {
             "status": "skipped",
@@ -216,7 +216,7 @@ def _run_cloak_registration_impl(email: str, name: str, birthday: str, proxy: st
         )
         codex_ok = codex_result.get("ok") or codex_result.get("status") == "skipped"
         twofa_ok = bool(twofa_result.get("ok"))
-        overall_ok = bool(codex_ok and twofa_ok)
+        overall_ok = bool(codex_ok)
         errors = []
         if not twofa_ok:
             errors.append(f"2FA 未完成: {twofa_result.get('message')}")
@@ -231,6 +231,7 @@ def _run_cloak_registration_impl(email: str, name: str, birthday: str, proxy: st
             "totp_secret": totp_secret,
             "twofa": twofa_result,
             "codex": codex_result,
+            "warning": "; ".join(errors) if errors else None,
             "error": None if overall_ok else "; ".join(errors),
         }
     except Exception as exc:

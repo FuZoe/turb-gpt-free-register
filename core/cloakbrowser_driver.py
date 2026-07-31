@@ -161,6 +161,18 @@ class CloakElement:
         except Exception:
             self.page.keyboard.type(text, delay=35)
 
+    @property
+    def text(self) -> str:
+        try:
+            if self.locator is not None:
+                return str(self.locator.inner_text(timeout=3000) or "")
+            return str(self.handle.inner_text(timeout=3000) or "")
+        except Exception:
+            try:
+                return str(self._eval("el => el.innerText || el.textContent || ''") or "")
+            except Exception:
+                return ""
+
     def get_attribute(self, name: str) -> str | None:
         try:
             if self.locator is not None:
