@@ -6,7 +6,13 @@ from unittest.mock import patch
 
 import pytest
 
-from webui.mihomo_proxy_pool import read_proxy_pool, test_proxy_pool as run_proxy_pool, test_proxy_pool_batch as run_proxy_batch, update_proxy_pool
+from webui.mihomo_proxy_pool import (
+    read_proxy_pool,
+    registration_local_proxy_urls,
+    test_proxy_pool as run_proxy_pool,
+    test_proxy_pool_batch as run_proxy_batch,
+    update_proxy_pool,
+)
 
 
 CONFIG = """\
@@ -78,6 +84,11 @@ def test_update_pool_replaces_blocks_and_group_members(tmp_path: Path):
     assert 'username: "new user"' in updated
     assert 'password: "p@ss"' in updated
     assert "        - CLIProxy-Pool-003" in updated
+    assert "- name: turb-registration-jp-001" in updated
+    assert "      port: 7901" in updated
+    assert "      proxy: CLIProxy-Pool-001" in updated
+    assert "- name: turb-registration-jp-003" in updated
+    assert "      port: 7903" in updated
     assert "Other-Proxy" in updated
     assert "Other-Group" in updated
     assert result["count"] == 3
@@ -96,6 +107,45 @@ def test_empty_country_pool_is_allowed_with_direct_placeholder(tmp_path: Path):
     assert "- name: CLIProxy-Pool-001" not in updated
     assert "        - DIRECT" in updated
     assert result["count"] == 0
+
+
+def test_registration_ports_are_disjoint_and_fixed_per_country():
+    assert registration_local_proxy_urls("jp", 3) == [
+        "http://127.0.0.1:7901",
+        "http://127.0.0.1:7902",
+        "http://127.0.0.1:7903",
+    ]
+    assert registration_local_proxy_urls("tr", 2) == [
+        "http://127.0.0.1:8401",
+        "http://127.0.0.1:8402",
+    ]
+    assert registration_local_proxy_urls("vn", 1) == ["http://127.0.0.1:8901"]
+    assert registration_local_proxy_urls("mx", 1) == ["http://127.0.0.1:9401"]
+
+
+def test_jp_update_replaces_legacy_fixed_listeners(tmp_path: Path):
+    path = tmp_path / "config.yaml"
+    source = (
+        "listeners:\n"
+        "    - name: turb-cliproxy-01\n"
+        "      type: mixed\n"
+        "      port: 7901\n"
+        "      listen: 127.0.0.1\n"
+        "      proxy: Old-Proxy\n\n"
+        + CONFIG
+    )
+    path.write_text(source, encoding="utf-8")
+    with (
+        patch.dict(os.environ, {"MIHOMO_CONFIG_PATH": str(path)}),
+        patch("webui.mihomo_proxy_pool._validate_config"),
+        patch("webui.mihomo_proxy_pool._reload_config"),
+    ):
+        update_proxy_pool("jp", ["http://user:pass@example.com:8080"])
+
+    updated = path.read_text(encoding="utf-8")
+    assert "turb-cliproxy-01" not in updated
+    assert updated.count("port: 7901") == 1
+    assert "proxy: CLIProxy-Pool-001" in updated
 
 
 @pytest.mark.parametrize("url", ["ftp://a:b@example:21", "socks5://missing-port"])

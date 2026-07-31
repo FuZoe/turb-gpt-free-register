@@ -26,12 +26,13 @@ MAX_TEST_CONCURRENCY = 5
 POOL_DEFINITIONS = {
     "jp": {
         "label": "JP 代理池",
-        "description": "由 127.0.0.1:7891 提供 round-robin 负载均衡",
+        "description": "注册任务使用独立固定端口，单个浏览器会话全程保持同一出口",
         "prefix": "CLIProxy-Pool-",
         "group": "CLIProxy-Pool",
         "local_entry": "http://127.0.0.1:7891",
         "listener_name": "cliproxy-in",
         "listener_port": 7891,
+        "registration_port_base": 7901,
         "min_count": 0,
         "max_count": 500,
     },
@@ -43,6 +44,7 @@ POOL_DEFINITIONS = {
         "local_entry": "http://127.0.0.1:7893",
         "listener_name": "cliproxy-vn-in",
         "listener_port": 7893,
+        "registration_port_base": 8901,
         "min_count": 0,
         "max_count": 500,
     },
@@ -54,6 +56,7 @@ POOL_DEFINITIONS = {
         "local_entry": "http://127.0.0.1:7892",
         "listener_name": "cliproxy-tr-in",
         "listener_port": 7892,
+        "registration_port_base": 8401,
         "min_count": 0,
         "max_count": 500,
     },
@@ -65,6 +68,7 @@ POOL_DEFINITIONS = {
         "local_entry": "http://127.0.0.1:7894",
         "listener_name": "cliproxy-mx-in",
         "listener_port": 7894,
+        "registration_port_base": 9401,
         "min_count": 0,
         "max_count": 500,
     },
@@ -180,8 +184,62 @@ def read_all_proxy_pools() -> list[dict[str, object]]:
     return [read_proxy_pool(key) for key in POOL_DEFINITIONS]
 
 
-def registration_local_proxy_urls() -> list[str]:
-    return [f"http://127.0.0.1:{port}" for port in range(7901, 7911)]
+def _registration_listener_name(pool_key: str, index: int) -> str:
+    return f"turb-registration-{pool_key}-{index:03d}"
+
+
+def registration_local_proxy_urls(pool_key: str = "jp", count: int = 10) -> list[str]:
+    definition = _definition(pool_key)
+    base = int(definition["registration_port_base"])
+    return [f"http://127.0.0.1:{base + index}" for index in range(max(0, int(count)))]
+
+
+def _replace_registration_listeners(
+    source: str,
+    pool_key: str,
+    proxy_names: list[str],
+) -> str:
+    """Bind one local port to each upstream so a browser session never changes IP."""
+    definition = _definition(pool_key)
+    listeners = re.search(r"(?m)^listeners:\s*$", source)
+    if not listeners:
+        marker = re.search(r"(?m)^(?:dns|proxies|proxy-groups):\s*$", source)
+        if not marker:
+            raise RuntimeError("无法定位 Mihomo listeners 插入位置")
+        source = source[:marker.start()] + "listeners:\n" + source[marker.start():]
+        listeners = re.search(r"(?m)^listeners:\s*$", source)
+    assert listeners is not None
+    next_section = re.search(r"(?m)^[A-Za-z][\w-]*:\s*", source[listeners.end():])
+    if not next_section:
+        section_end = len(source)
+    else:
+        section_end = listeners.end() + next_section.start()
+
+    section = source[listeners.end():section_end]
+    managed_pattern = re.compile(
+        rf"(?ms)^    - name:\s*turb-registration-{re.escape(pool_key)}-\d+\s*$"
+        rf".*?(?=^    - name:|\Z)"
+    )
+    section = managed_pattern.sub("", section)
+
+    # 7901–7910 最初由手工配置的 turb-cliproxy-* 占用；JP 池接管这些
+    # 端口时一并清理，避免 Mihomo 因重复监听端口而拒绝加载。
+    if pool_key == "jp":
+        legacy_pattern = re.compile(
+            r"(?ms)^    - name:\s*turb-cliproxy-\d+\s*$.*?(?=^    - name:|\Z)"
+        )
+        section = legacy_pattern.sub("", section)
+
+    base = int(definition["registration_port_base"])
+    rendered = "".join(
+        "    - name: " + _registration_listener_name(pool_key, index) + "\n"
+        "      type: mixed\n"
+        f"      port: {base + index - 1}\n"
+        "      listen: 127.0.0.1\n"
+        f"      proxy: {name}\n\n"
+        for index, name in enumerate(proxy_names, start=1)
+    )
+    return source[:listeners.end()] + "\n" + rendered + section.lstrip("\n") + source[section_end:]
 
 
 def _render_proxy_block(name: str, proxy: dict[str, object]) -> str:
@@ -267,6 +325,7 @@ def update_proxy_pool(pool_key: str, lines: list[str]) -> dict[str, object]:
             raise RuntimeError("Mihomo 配置缺少 proxy-groups 段")
         updated = source[: marker.start()] + rendered + source[marker.start() :]
     updated = _replace_group_members(updated, str(definition["group"]), names)
+    updated = _replace_registration_listeners(updated, pool_key, names)
 
     if updated == source:
         return {"pool": pool_key, "count": len(values), "changed": False}
@@ -296,6 +355,19 @@ def update_proxy_pool(pool_key: str, lines: list[str]) -> dict[str, object]:
     finally:
         if temp_path.exists():
             temp_path.unlink()
+
+    # If this country is currently selected, keep the runtime pool synchronized
+    # with the number of fixed listeners after an edit.
+    active = registration_route_state()
+    if active.get("pool") == pool_key:
+        from config.env_loader import load_env, write_env_values
+        write_env_values({"PROXY_POOL": "\n".join(registration_local_proxy_urls(pool_key, len(names)))})
+        load_env(override=True)
+        try:
+            import config as config_pkg
+            config_pkg.reload_all()
+        except Exception:
+            pass
     return {
         "pool": pool_key,
         "count": len(values),
@@ -490,6 +562,17 @@ def registration_route_state() -> dict[str, object]:
     except Exception:
         configured = []
     for pool_key, definition in POOL_DEFINITIONS.items():
+        pool = read_proxy_pool(pool_key)
+        fixed_urls = registration_local_proxy_urls(pool_key, len(configured))
+        if configured == fixed_urls and configured:
+            return {
+                "pool": pool_key,
+                "label": definition["label"],
+                "local_entry": f"{configured[0]}–{configured[-1].rsplit(':', 1)[-1]}",
+                "count": pool["count"],
+                "route_count": len(configured),
+                "legacy": False,
+            }
         if configured == [definition["local_entry"]]:
             pool = read_proxy_pool(pool_key)
             return {
@@ -497,7 +580,7 @@ def registration_route_state() -> dict[str, object]:
                 "label": definition["label"],
                 "local_entry": definition["local_entry"],
                 "count": pool["count"],
-                "legacy": False,
+                "legacy": True,
             }
     return {
         "pool": "",
@@ -513,8 +596,13 @@ def select_registration_pool(pool_key: str) -> dict[str, object]:
     pool = read_proxy_pool(pool_key)
     if int(pool["count"]) <= 0:
         raise ValueError(f"{definition['label']}还是空的，请先添加代理")
+    # Older deployments only have the country's round-robin entry. Materialize
+    # the per-upstream listeners before exposing their ports to workers.
+    update_proxy_pool(pool_key, list(pool["proxies"]))
+    pool = read_proxy_pool(pool_key)
     from config.env_loader import load_env, write_env_values
-    write_env_values({"PROXY_POOL": str(definition["local_entry"])})
+    fixed_urls = registration_local_proxy_urls(pool_key, int(pool["count"]))
+    write_env_values({"PROXY_POOL": "\n".join(fixed_urls)})
     load_env(override=True)
     try:
         import config as config_pkg
@@ -530,7 +618,7 @@ def read_upstream_proxy_urls() -> list[str]:
 
 
 def local_proxy_urls(count: int) -> list[str]:
-    return registration_local_proxy_urls()[:count]
+    return registration_local_proxy_urls(count=count)
 
 
 def update_upstream_proxy_urls(lines: list[str]) -> dict[str, object]:
