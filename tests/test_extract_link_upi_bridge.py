@@ -78,3 +78,34 @@ def test_upi_bridge_ignores_stale_legacy_link_type(monkeypatch):
     monkeypatch.setenv("EXTRACT_LINK_TYPE", "pix")
     assert service._link_type() == "upi"
     assert service._link_type("ideal") == "upi"
+
+
+def test_query_cdk_uses_newzoe_status_endpoint(monkeypatch):
+    class JsonResponse:
+        status_code = 200
+        text = ""
+
+        @staticmethod
+        def json():
+            return {"ok": True, "remaining_uses": 7, "total_uses": 10}
+
+    class JsonSession:
+        def __init__(self):
+            self.call = None
+
+        def post(self, url, **kwargs):
+            self.call = (url, kwargs)
+            return JsonResponse()
+
+        def close(self):
+            pass
+
+    session = JsonSession()
+    monkeypatch.setattr(service, "_session", lambda: session)
+    monkeypatch.setattr(service, "_api_base", lambda: "https://upi.newzoe.cloud")
+
+    result = service.query_cdk(cdk="CDK_VALUE")
+
+    assert result["remaining_uses"] == 7
+    assert session.call[0] == "https://upi.newzoe.cloud/api/cdk/status"
+    assert session.call[1]["json"] == {"cdk": "CDK_VALUE", "cdk_type": "normal"}

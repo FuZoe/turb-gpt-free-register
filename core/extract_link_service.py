@@ -9,7 +9,6 @@ import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 try:
@@ -91,14 +90,20 @@ def query_cdk(*, cdk: str | None = None) -> dict:
     base = _api_base()
     code = _cdk(cdk)
     timeout = _int_setting("EXTRACT_LINK_REQUEST_TIMEOUT", 30, 5, 300)
+    body_data = {"cdk": code, "cdk_type": "normal"}
     s = _session()
     try:
         if s is None:
-            req = Request(f"{base}/api/cdk?{urlencode({'code': code})}", headers={"Accept": "application/json"})
+            req = Request(
+                f"{base}/api/cdk/status",
+                data=json.dumps(body_data).encode("utf-8"),
+                headers={"Accept": "application/json", "Content-Type": "application/json"},
+                method="POST",
+            )
             with urlopen(req, timeout=timeout) as resp:
                 payload = json.loads(resp.read().decode("utf-8", "replace") or "{}")
             return payload if isinstance(payload, dict) else {}
-        resp = s.get(f"{base}/api/cdk?{urlencode({'code': code})}", timeout=timeout)
+        resp = s.post(f"{base}/api/cdk/status", json=body_data, timeout=timeout)
         try:
             payload = resp.json()
         except Exception:
