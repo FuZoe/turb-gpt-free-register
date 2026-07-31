@@ -1108,6 +1108,17 @@ def _is_signup_password_page(driver) -> bool:
     )
 
 
+def _has_visible_password_input(state: dict | None) -> bool:
+    return any(
+        item.get('visible') and (
+            str(item.get('type') or '').lower() == 'password'
+            or 'password' in str(item.get('name') or '').lower()
+            or str(item.get('autocomplete') or '').lower() == 'new-password'
+        )
+        for item in ((state or {}).get('inputs') or [])
+    )
+
+
 def _is_login_password_page(driver) -> bool:
     try:
         url = str(driver.current_url or '').lower()
@@ -1242,6 +1253,7 @@ def _fill_password_page_if_present(driver, email: str, timeout: int = 25, *, pre
     """邮箱提交后兼容 create-account/password。返回本次设置的 OpenAI 账号密码；未遇到密码页返回 None。"""
     end = time.time() + timeout
     last = {}
+    saw_signup_password_url = False
     while time.time() < end:
         if _is_email_verification_page(driver):
             return None
@@ -1253,6 +1265,14 @@ def _fill_password_page_if_present(driver, email: str, timeout: int = 25, *, pre
         if not (is_signup_password or is_login_password):
             time.sleep(0.5)
             continue
+        if is_signup_password:
+            saw_signup_password_url = True
+            # The URL changes before React mounts the password form. An empty
+            # loading DOM is a transition state, not a terminal missing-input error.
+            if not _has_visible_password_input(last):
+                _raise_if_cloudflare_network_failure(driver)
+                time.sleep(0.5)
+                continue
         passwordless = {} if prefer_password else _click_passwordless_signup_if_present(driver)
         if passwordless.get('ok'):
             logger.info("%s 检测到 password 页，已点击一次性验证码入口：email=%s detail=%s", _log_prefix(driver), email, passwordless)
@@ -1354,6 +1374,8 @@ def _fill_password_page_if_present(driver, email: str, timeout: int = 25, *, pre
                     return password
                 time.sleep(0.5)
         raise RuntimeError(f"密码提交后等待页面跳转超时，仍停留在密码页: state={_password_page_state(driver)}")
+    if saw_signup_password_url:
+        raise RuntimeError(f"密码页 URL 已出现但表单在 {timeout}s 内未完成加载: state={last}")
     logger.info("%s 未检测到密码页，继续后续流程 last=%s", _log_prefix(driver), last)
     return None
 
