@@ -50,6 +50,15 @@ proxy-groups:
 """
 
 
+@pytest.fixture(autouse=True)
+def isolate_runtime_registration_route(monkeypatch):
+    """Temporary Mihomo fixtures must never rewrite the host application's .env."""
+    monkeypatch.setattr(
+        "webui.mihomo_proxy_pool.registration_route_state",
+        lambda: {"pool": "", "legacy": False},
+    )
+
+
 def test_read_pool_in_numeric_order(tmp_path: Path):
     path = tmp_path / "config.yaml"
     path.write_text(CONFIG, encoding="utf-8")
