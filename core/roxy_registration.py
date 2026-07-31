@@ -583,6 +583,7 @@ def _type_otp(driver, code: str, timeout: int = 20) -> None:
 
     end = time.time() + timeout
     while time.time() < end:
+        _raise_if_cloudflare_challenge(driver, _email_otp_page_state(driver))
         # URL 已进入 email-verification 时 DOM 仍可能处于 loading，等待输入框真正挂载。
         for selector in [
             "input[autocomplete='one-time-code']",
@@ -681,6 +682,7 @@ def _click_resend_email_otp(driver, timeout: int = 20) -> dict:
     end = time.time() + timeout
     last = None
     while time.time() < end:
+        _raise_if_cloudflare_challenge(driver, _email_otp_page_state(driver))
         try:
             btn = driver.execute_script(r"""
             const visible = el => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
@@ -719,6 +721,7 @@ def _wait_after_email_otp_submit(driver, timeout: int = 10) -> str:
     last = {}
     while time.time() < end:
         time.sleep(0.5)
+        _raise_if_cloudflare_challenge(driver, _email_otp_page_state(driver))
         if not _is_email_verification_page(driver):
             return 'accepted'
         last = _email_otp_page_state(driver)
@@ -1255,6 +1258,7 @@ def _fill_password_page_if_present(driver, email: str, timeout: int = 25, *, pre
     last = {}
     saw_signup_password_url = False
     while time.time() < end:
+        _raise_if_cloudflare_challenge(driver)
         if _is_email_verification_page(driver):
             return None
         if _has_access_token(driver):
@@ -1455,6 +1459,7 @@ def _complete_profile_page(driver, name: str, birthday: str, timeout: int = 45) 
             return False
         snap = _page_snapshot(driver)
         last_snapshot = snap
+        _raise_if_cloudflare_challenge(driver, snap)
         current_url = str(snap.get('url') or '').lower()
         if 'chatgpt.com' in current_url and 'auth.openai.com' not in current_url:
             logger.info('%s 资料页提交完成并已进入 ChatGPT：%s', _log_prefix(driver), snap.get('url'))

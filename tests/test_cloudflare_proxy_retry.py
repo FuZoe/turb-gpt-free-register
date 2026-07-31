@@ -1,5 +1,7 @@
 from config import proxy as proxy_cfg
 from core import registration_service as service
+from core import roxy_registration as reg
+import pytest
 
 
 def test_proxy_picker_skips_temporarily_bad_endpoint(monkeypatch):
@@ -49,3 +51,16 @@ def test_cloudflare_auto_retry_stops_at_limit(monkeypatch):
 
     assert result["created"] is False
     assert called == []
+
+
+def test_otp_input_stage_surfaces_cloudflare_instead_of_timing_out(monkeypatch):
+    state = {
+        "url": "https://auth.openai.com/api/accounts/email-otp/send",
+        "title": "しばらくお待ちください...",
+        "text": "セキュリティ検証の実行 Cloudflare Ray ID: test",
+        "inputs": [],
+    }
+    monkeypatch.setattr(reg, "_email_otp_page_state", lambda _driver: state)
+
+    with pytest.raises(reg.CloudflareChallengeError):
+        reg._type_otp(object(), "123456", timeout=1)
