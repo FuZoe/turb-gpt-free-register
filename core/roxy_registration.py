@@ -715,6 +715,14 @@ def _page_snapshot(driver) -> dict:
 
 def _has_access_token(driver) -> bool:
     try:
+        current = str(getattr(driver, 'current_url', '') or '').lower()
+    except Exception:
+        current = ''
+    # Calling chatgpt.com from an auth.openai.com page is blocked by CORS and
+    # only produces misleading request failures in diagnostics.
+    if 'chatgpt.com' not in current or 'auth.openai.com' in current:
+        return False
+    try:
         result = driver.execute_async_script(r"""
         const done = arguments[0];
         fetch('https://chatgpt.com/api/auth/session', {credentials:'include'})
@@ -1336,13 +1344,16 @@ def _accept_profile_consents(driver) -> int:
 
 
 def _complete_profile_page(driver, name: str, birthday: str, timeout: int = 45) -> bool:
-    """等待并完成姓名/生日页；若已经登录成功则返回 False，不把它当失败。"""
+    """填写资料并确认真正离开 about-you；停留时自动重提。"""
     end = time.time() + timeout
     y, m, d = birthday.split('-')
     from datetime import date
     today = date.today()
     age = today.year - int(y) - ((today.month, today.day) < (int(m), int(d)))
     last_snapshot = {}
+    submitted = False
+    last_submit_at = 0.0
+    last_wait_log = 0.0
     while time.time() < end:
         time.sleep(1)
         if _has_access_token(driver):
@@ -1350,11 +1361,29 @@ def _complete_profile_page(driver, name: str, birthday: str, timeout: int = 45) 
             return False
         snap = _page_snapshot(driver)
         last_snapshot = snap
+        current_url = str(snap.get('url') or '').lower()
+        if 'chatgpt.com' in current_url and 'auth.openai.com' not in current_url:
+            logger.info('%s 资料页提交完成并已进入 ChatGPT：%s', _log_prefix(driver), snap.get('url'))
+            return True
         if not _is_profile_like(snap):
-            logger.info('%s 等待资料页中：url=%s', _log_prefix(driver), snap.get('url'))
+            if time.time() - last_wait_log >= 3:
+                logger.info('%s 等待资料页跳转/登录态同步：url=%s', _log_prefix(driver), snap.get('url'))
+                last_wait_log = time.time()
             continue
 
-        logger.info('%s 检测到资料页，开始填写姓名生日：url=%s inputs=%s', _log_prefix(driver), snap.get('url'), snap.get('inputs'))
+        if submitted and time.time() - last_submit_at < 6:
+            if time.time() - last_wait_log >= 3:
+                logger.info('%s 资料页已提交但仍未跳转，继续等待：url=%s', _log_prefix(driver), snap.get('url'))
+                last_wait_log = time.time()
+            continue
+
+        logger.info(
+            '%s %s资料页，开始填写姓名生日：url=%s inputs=%s',
+            _log_prefix(driver),
+            '重新提交' if submitted else '检测到',
+            snap.get('url'),
+            snap.get('inputs'),
+        )
         name_ok = False
         # 常见单姓名字段
         for selectors in [
@@ -1391,9 +1420,14 @@ def _complete_profile_page(driver, name: str, birthday: str, timeout: int = 45) 
         for _ in range(3):
             if _click_if_enabled_submit(driver):
                 logger.info('%s 已点击资料页提交按钮，等待 OAuth 跳转', _log_prefix(driver))
-                return True
+                submitted = True
+                last_submit_at = time.time()
+                break
             time.sleep(1)
-        logger.warning('%s 找不到可点击的资料页提交按钮 snapshot=%s', _log_prefix(driver), _page_snapshot(driver))
+        else:
+            logger.warning('%s 找不到可点击的资料页提交按钮 snapshot=%s', _log_prefix(driver), _page_snapshot(driver))
+    if submitted and _is_profile_like(last_snapshot):
+        raise RuntimeError(f'资料页提交后仍未跳转，已停止后续 session 读取；最后页面：{last_snapshot}')
     raise RuntimeError(f'等待/填写资料页超时，最后页面：{last_snapshot}')
 
 
@@ -1501,6 +1535,13 @@ def _fetch_chatgpt_session(driver, timeout: int = 90, auto_jump_wait: int = 15) 
         if 'chatgpt.com' not in current:
             if _switch_to_chatgpt_window_if_any(driver):
                 current = str(getattr(driver, "current_url", "") or "")
+            elif any(x in current.lower() for x in ('about-you', 'profile', 'signup/profile', 'create-account')):
+                # Never abandon an unfinished auth form by navigating away. The
+                # previous behavior turned a recoverable profile-submit issue
+                # into an anonymous ChatGPT page and a 90-second token timeout.
+                last_data = f"仍在认证资料页: {current}"
+                time.sleep(1)
+                continue
             elif time.time() >= auto_jump_end and not forced_chatgpt_open:
                 try:
                     logger.info("%s 未在 %ss 内观察到当前窗口跳转 chatgpt.com，主动打开 ChatGPT 内读取 session", _log_prefix(driver), int(auto_jump_wait or 15))
@@ -1524,7 +1565,14 @@ def _fetch_chatgpt_session(driver, timeout: int = 90, auto_jump_wait: int = 15) 
                 last_data = f"{type(exc).__name__}: {exc}"
         time.sleep(2)
 
-    raise RuntimeError(f"等待 /api/auth/session accessToken 超时，最后响应: {str(last_data)[:800]}")
+    try:
+        final_snapshot = _page_snapshot(driver)
+    except Exception:
+        final_snapshot = {}
+    raise RuntimeError(
+        f"等待 /api/auth/session accessToken 超时，最后响应: {str(last_data)[:800]} "
+        f"final={str(final_snapshot)[:1200]}"
+    )
 
 
 def _check_manual_stop() -> None:
