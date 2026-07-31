@@ -283,34 +283,70 @@ def _disable_job_email(email: str | None, reason: str) -> bool:
 
 
 def recover_interrupted_jobs() -> int:
-    """Web 服务启动时回收上一个进程遗留的活跃任务。
-
-    线程池只存在于进程内；服务一旦重启，持久化为 pending/running/stopping
-    的记录已经没有对应 Future 或工作线程。把它们落为 stopped，既避免前端
-    永久显示运行，也允许用户从原任务创建一次可追踪的重试。
-    """
+    """Re-submit queued/running jobs after a Web service restart."""
     active_states = {"pending", "running", "stopping"}
-    stale_jobs = [
+    stale_jobs = sorted([
         job for job in db.list_jobs(limit=100_000)
         if str(job.get("status") or "") in active_states
-    ]
+    ], key=lambda job: int(job.get("id") or 0))
     if not stale_jobs:
         return 0
 
-    now_iso = datetime.now().isoformat(timespec="seconds")
+    tenant_id = current_tenant()
+    executor = get_executor(max_workers=_DEFAULT_MAX_WORKERS)
     for job in stale_jobs:
         job_id = int(job.get("id") or 0)
         old_status = str(job.get("status") or "unknown")
-        reason = f"服务进程重启，原任务实例已终止（原状态：{old_status}）"
-        db.update_job(
-            job_id,
-            status="stopped",
-            error=reason,
-            completed_at=now_iso,
-        )
-        _release_unconsumed_job_email(str(job.get("email") or "").strip() or None, reason)
+        job_type = str(job.get("job_type") or "registration")
+        if old_status == "stopping":
+            reason = "服务重启时任务已处于停止中，保持停止状态"
+            db.update_job(job_id, status="stopped", error=reason, completed_at=datetime.now().isoformat(timespec="seconds"))
+            if job_type == "registration":
+                _release_unconsumed_job_email(str(job.get("email") or "").strip() or None, reason)
+            _append_job_log(job_id, reason, source="startup-recovery")
+            continue
+
+        reason = f"服务进程重启，任务自动重新排队（原状态：{old_status}）"
+        clear_email = job_type == "registration"
+        if old_status == "running" and clear_email:
+            _release_unconsumed_job_email(str(job.get("email") or "").strip() or None, reason)
+        if not db.requeue_interrupted_job(job_id, clear_email=clear_email):
+            logger.error("[Service] 启动时重新排队失败，任务不存在：#%s", job_id)
+            continue
         _append_job_log(job_id, reason, source="startup-recovery")
-        logger.warning("[Service] 启动时回收孤儿任务 #%s：%s -> stopped", job_id, old_status)
+
+        try:
+            if job_type == "codex_retry":
+                email = str(job.get("email") or "").strip()
+                account_id = int(job.get("account_id") or 0)
+                if not email or not account_id or not codex_retry_service.reserve(email):
+                    raise RuntimeError("Codex 补跑任务缺少账号信息或已有同账号任务")
+                db.update_account_codex_status(email, "retrying", None)
+                executor.submit(
+                    _run_registration_with_global_slot,
+                    tenant_id,
+                    _run_codex_retry_job,
+                    job_id,
+                    job.get("log_file") or "",
+                    email,
+                    account_id,
+                )
+            else:
+                executor.submit(
+                    _run_registration_with_global_slot,
+                    tenant_id,
+                    _run_one_job,
+                    job_id,
+                    job.get("log_file") or "",
+                )
+            logger.warning("[Service] 启动时恢复任务 #%s：%s -> pending", job_id, old_status)
+        except Exception as exc:
+            if job_type == "codex_retry":
+                codex_retry_service.release(str(job.get("email") or ""))
+            error = f"服务重启后重新提交失败：{type(exc).__name__}: {exc}"[:500]
+            db.update_job(job_id, status="failed", error=error, completed_at=datetime.now().isoformat(timespec="seconds"))
+            _append_job_log(job_id, error, source="startup-recovery")
+            logger.exception("[Service] 启动时提交恢复任务失败：#%s", job_id)
     return len(stale_jobs)
 
 

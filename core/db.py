@@ -2350,6 +2350,24 @@ def update_job(
         _save_jobs(rows)
 
 
+def requeue_interrupted_job(job_id: int, *, clear_email: bool = False) -> bool:
+    """Reset an interrupted in-memory job so startup recovery can submit it again."""
+    with _LOCK:
+        rows = _load_jobs()
+        row = next((r for r in rows if int(r.get("id") or 0) == int(job_id)), None)
+        if row is None:
+            return False
+        row["status"] = "pending"
+        row["error_message"] = None
+        row["started_at"] = None
+        row["completed_at"] = None
+        if clear_email:
+            row["email"] = None
+            row["account_id"] = None
+        _save_jobs(rows)
+        return True
+
+
 def list_jobs(limit: int = 100) -> list[dict]:
     with _LOCK:
         rows = sorted(_load_jobs(), key=lambda x: int(x.get("id") or 0), reverse=True)
