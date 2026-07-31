@@ -25,6 +25,7 @@ def test_friend_tenant_can_read_and_modify_shared_proxy_manager(monkeypatch):
         patch("webui.mihomo_proxy_pool.registration_route_state", return_value={"pool": "jp"}),
         patch("webui.mihomo_proxy_pool.update_proxy_pool", return_value={"pool": "jp", "count": 1}),
         patch("webui.mihomo_proxy_pool.test_proxy_pool", return_value={"pool": "jp", "results": []}),
+        patch("webui.mihomo_proxy_pool.test_proxy_pool_batch", return_value={"pool": "jp", "results": [], "done": True}),
         patch("webui.mihomo_proxy_pool.select_registration_pool", return_value={"pool": "jp"}),
     ):
         client = app.test_client()
@@ -36,6 +37,11 @@ def test_friend_tenant_can_read_and_modify_shared_proxy_manager(monkeypatch):
         ).status_code == 200
         assert client.post(
             "/api/proxy-manager/test", headers=headers, json={"pool": "jp"}
+        ).status_code == 200
+        assert client.post(
+            "/api/proxy-manager/test-batch",
+            headers=headers,
+            json={"pool": "jp", "offset": 0, "limit": 5},
         ).status_code == 200
         assert client.post(
             "/api/proxy-manager/registration-route", headers=headers, json={"pool": "jp"}
@@ -50,6 +56,7 @@ def test_unlisted_tenant_cannot_access_shared_proxy_manager(monkeypatch):
     assert client.get("/api/proxy-manager", headers=headers).status_code == 403
     assert client.post("/api/proxy-manager/save", headers=headers, json={}).status_code == 403
     assert client.post("/api/proxy-manager/test", headers=headers, json={}).status_code == 403
+    assert client.post("/api/proxy-manager/test-batch", headers=headers, json={}).status_code == 403
     assert client.post(
         "/api/proxy-manager/registration-route", headers=headers, json={}
     ).status_code == 403

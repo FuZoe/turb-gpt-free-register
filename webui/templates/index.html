@@ -3058,8 +3058,11 @@ $('#btnSaveProxyPool').addEventListener('click', async () => {
 
 function renderProxyTestResults(response) {
   const avg = response.average_delay == null ? '-' : `${fmt(response.average_delay)} ms`;
+  const progress = response.total == null
+    ? `共 ${fmt(response.count)} 条`
+    : `${response.done ? '已完成' : '检测中'} ${fmt(response.count)}/${fmt(response.total)} 条`;
   $('#proxyTestSummary').innerHTML = `
-    共 ${fmt(response.count)} 条 ·
+    ${progress} ·
     <span style="color:var(--green);font-weight:800;">成功 ${fmt(response.success)}</span> ·
     <span style="color:${response.failed ? 'var(--red)' : 'var(--green)'};font-weight:800;">失败 ${fmt(response.failed)}</span> ·
     平均延迟 ${avg}${response.retried ? ` · 重试 ${fmt(response.retried)} 条，恢复 ${fmt(response.recovered || 0)} 条` : ''}
@@ -3085,19 +3088,46 @@ $('#btnTestProxyPool').addEventListener('click', async () => {
   }
   const button = $('#btnTestProxyPool');
   button.disabled = true;
-  $('#proxyTestSummary').textContent = `正在排队检测 ${pool.count} 条代理，每次最多 5 条，请稍候...`;
-  $('#proxyTestBody').innerHTML = '<tr><td colspan="5" class="muted">检测进行中...</td></tr>';
+  const rows = [];
+  let offset = 0;
+  let total = pool.count;
+  let retried = 0;
+  let recovered = 0;
+  $('#proxyTestSummary').textContent = `正在排队检测 ${pool.count} 条代理，每批 5 条...`;
+  $('#proxyTestBody').innerHTML = '<tr><td colspan="5" class="muted">等待第一批检测结果...</td></tr>';
   try {
-    const response = await api('/api/proxy-manager/test', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({pool: pool.key, timeout_ms: 8000}),
-    });
-    renderProxyTestResults(response);
-    showToast(`检测完成：成功 ${response.success}，失败 ${response.failed}`);
+    let done = total === 0;
+    while (!done) {
+      const batch = await api('/api/proxy-manager/test-batch', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({pool: pool.key, offset, limit: 5, timeout_ms: 8000}),
+      });
+      rows.push(...(batch.results || []));
+      offset = batch.next_offset;
+      total = batch.total;
+      done = batch.done;
+      retried += batch.retried || 0;
+      recovered += batch.recovered || 0;
+      const success = rows.filter(item => item.ok).length;
+      const delays = rows.filter(item => item.ok && item.delay != null).map(item => Number(item.delay));
+      renderProxyTestResults({
+        count: rows.length,
+        total,
+        done,
+        success,
+        failed: rows.length - success,
+        average_delay: delays.length ? Math.round(delays.reduce((a, b) => a + b, 0) / delays.length) : null,
+        retried,
+        recovered,
+        results: rows,
+      });
+    }
+    const success = rows.filter(item => item.ok).length;
+    showToast(`检测完成：成功 ${success}，失败 ${rows.length - success}`);
   } catch(e) {
-    $('#proxyTestSummary').textContent = `检测失败：${e.message}`;
-    $('#proxyTestBody').innerHTML = `<tr><td colspan="5" class="muted">${esc(e.message)}</td></tr>`;
+    $('#proxyTestSummary').textContent = `检测中断：已显示 ${rows.length}/${total} 条；${e.message}`;
+    if (!rows.length) $('#proxyTestBody').innerHTML = `<tr><td colspan="5" class="muted">${esc(e.message)}</td></tr>`;
   } finally {
     button.disabled = false;
   }

@@ -319,22 +319,27 @@ def _test_one(name: str, timeout_ms: int) -> dict[str, object]:
         return {"name": name, "ok": False, "delay": None, "error": str(exc)}
 
 
-def test_proxy_pool(pool_key: str, timeout_ms: int = 8000, workers: int = 24) -> dict[str, object]:
-    pool = read_proxy_pool(pool_key)
-    names = list(pool["names"])
+def _test_proxy_names(
+    names: list[str],
+    timeout_ms: int,
+    workers: int,
+    *,
+    start_index: int = 1,
+) -> dict[str, object]:
     timeout_ms = max(1000, min(int(timeout_ms), 30000))
     workers = max(1, min(int(workers), MAX_TEST_CONCURRENCY, len(names) or 1))
     indexed_results: dict[int, dict[str, object]] = {}
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {
             executor.submit(_test_one, name, timeout_ms): index
-            for index, name in enumerate(names, start=1)
+            for index, name in enumerate(names, start=start_index)
         }
         for future in as_completed(futures):
             index = futures[future]
             result = future.result()
             result["index"] = index
             indexed_results[index] = result
+
     # 大批代理通常共用同一个供应商网关。首轮高并发会让少数本来可用的
     # 线路收到 Mihomo 503/504；等待片刻后仅以低并发重试失败项，避免把
     # 网关瞬时拥塞误报成代理永久失效。
@@ -345,7 +350,7 @@ def test_proxy_pool(pool_key: str, timeout_ms: int = 8000, workers: int = 24) ->
         retry_workers = max(1, min(MAX_TEST_CONCURRENCY, len(failed_indexes)))
         with ThreadPoolExecutor(max_workers=retry_workers) as executor:
             retry_futures = {
-                executor.submit(_test_one, names[index - 1], timeout_ms): index
+                executor.submit(_test_one, names[index - start_index], timeout_ms): index
                 for index in failed_indexes
             }
             for future in as_completed(retry_futures):
@@ -361,7 +366,6 @@ def test_proxy_pool(pool_key: str, timeout_ms: int = 8000, workers: int = 24) ->
     success = sum(1 for item in results if item["ok"])
     delays = [int(item["delay"]) for item in results if item["ok"] and item["delay"] is not None]
     return {
-        "pool": pool_key,
         "count": len(results),
         "success": success,
         "failed": len(results) - success,
@@ -370,6 +374,47 @@ def test_proxy_pool(pool_key: str, timeout_ms: int = 8000, workers: int = 24) ->
         "recovered": recovered,
         "average_delay": round(sum(delays) / len(delays)) if delays else None,
         "results": results,
+    }
+
+
+def test_proxy_pool(pool_key: str, timeout_ms: int = 8000, workers: int = 24) -> dict[str, object]:
+    pool = read_proxy_pool(pool_key)
+    names = list(pool["names"])
+    return {
+        "pool": pool_key,
+        **_test_proxy_names(names, timeout_ms, workers),
+    }
+
+
+def test_proxy_pool_batch(
+    pool_key: str,
+    *,
+    offset: int = 0,
+    limit: int = MAX_TEST_CONCURRENCY,
+    timeout_ms: int = 8000,
+) -> dict[str, object]:
+    """检测一批代理并立即返回，供 WebUI 逐批展示结果。"""
+    pool = read_proxy_pool(pool_key)
+    names = list(pool["names"])
+    total = len(names)
+    offset = max(0, min(int(offset), total))
+    limit = max(1, min(int(limit), MAX_TEST_CONCURRENCY))
+    batch_names = names[offset:offset + limit]
+    result = _test_proxy_names(
+        batch_names,
+        timeout_ms,
+        workers=limit,
+        start_index=offset + 1,
+    )
+    next_offset = offset + len(batch_names)
+    return {
+        "pool": pool_key,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "next_offset": next_offset,
+        "done": next_offset >= total,
+        **result,
     }
 
 

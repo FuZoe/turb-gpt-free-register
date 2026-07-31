@@ -2316,6 +2316,27 @@ def create_app(auth_code: str | None = None) -> Flask:
             logger.exception("检测 Mihomo 代理池失败")
             return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 500
 
+    @app.post("/api/proxy-manager/test-batch")
+    def api_proxy_manager_test_batch():
+        if not can_manage_shared_proxies(current_tenant()):
+            return jsonify({"ok": False, "error": "租户账号不能检测共享代理"}), 403
+        data = request.get_json(silent=True) or {}
+        pool_key = str(data.get("pool") or "").strip()
+        try:
+            from webui.mihomo_proxy_pool import test_proxy_pool_batch
+            result = test_proxy_pool_batch(
+                pool_key,
+                offset=int(data.get("offset") or 0),
+                limit=int(data.get("limit") or 5),
+                timeout_ms=int(data.get("timeout_ms") or 8000),
+            )
+            return jsonify({"ok": True, **result})
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except Exception as exc:
+            logger.exception("分批检测 Mihomo 代理池失败")
+            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 500
+
     @app.post("/api/proxy-manager/registration-route")
     def api_proxy_manager_registration_route():
         if not can_manage_shared_proxies(current_tenant()):

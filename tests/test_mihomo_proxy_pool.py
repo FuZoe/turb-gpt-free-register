@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from webui.mihomo_proxy_pool import read_proxy_pool, test_proxy_pool as run_proxy_pool, update_proxy_pool
+from webui.mihomo_proxy_pool import read_proxy_pool, test_proxy_pool as run_proxy_pool, test_proxy_pool_batch as run_proxy_batch, update_proxy_pool
 
 
 CONFIG = """\
@@ -159,3 +159,28 @@ def test_proxy_test_queues_at_most_five_concurrent_checks(monkeypatch):
     assert result["concurrency"] == 5
     assert result["success"] == 12
     assert result["failed"] == 0
+
+
+def test_proxy_batch_returns_five_rows_with_global_indexes(monkeypatch):
+    names = [f"proxy-{index}" for index in range(12)]
+    seen = []
+
+    def fake_test(name, _timeout_ms):
+        seen.append(name)
+        return {"name": name, "ok": True, "delay": 100, "error": ""}
+
+    monkeypatch.setattr(
+        "webui.mihomo_proxy_pool.read_proxy_pool",
+        lambda _pool: {"names": names},
+    )
+    monkeypatch.setattr("webui.mihomo_proxy_pool._test_one", fake_test)
+
+    result = run_proxy_batch("jp", offset=5, limit=99, timeout_ms=1000)
+
+    assert seen == names[5:10]
+    assert [item["index"] for item in result["results"]] == [6, 7, 8, 9, 10]
+    assert result["count"] == 5
+    assert result["total"] == 12
+    assert result["next_offset"] == 10
+    assert result["done"] is False
+    assert result["concurrency"] == 5
