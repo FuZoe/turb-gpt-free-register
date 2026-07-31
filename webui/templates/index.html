@@ -267,6 +267,7 @@
     }
     .accounts-toolbar .inline-num input[type="number"] { width: 56px; min-height: 26px; padding: 2px 6px; border-radius: 7px; }
     .accounts-toolbar .inline-num input[type="checkbox"] { margin: 0; }
+    .accounts-toolbar .inline-num select { width: auto; min-width: 88px; min-height: 26px; margin: 0; padding: 2px 28px 2px 8px; border-radius: 7px; }
     .accounts-table { font-size: 12px; }
     .accounts-table th, .accounts-table td { padding: 7px 8px; }
     .accounts-table .col-check { width: 34px; }
@@ -533,6 +534,20 @@
             </label>
             <label class="inline-num" title="只查询/显示已开通 Plus 的账号">
               <input id="showPlusAccountsOnly" type="checkbox" style="width:auto;min-height:auto;"> 已开通Plus
+            </label>
+            <label class="inline-num">2FA
+              <select id="accountTwofaFilter" title="按 2FA 启用状态筛选账号">
+                <option value="">全部</option>
+                <option value="enabled">已启用</option>
+                <option value="disabled">未启用</option>
+              </select>
+            </label>
+            <label class="inline-num">密码
+              <select id="accountPasswordFilter" title="按登录密码保存状态筛选账号">
+                <option value="">全部</option>
+                <option value="present">有密码</option>
+                <option value="missing">无密码</option>
+              </select>
             </label>
             <button class="btn" id="btnRefreshAccounts" title="重新加载当前筛选条件和当前页账号列表">刷新账号</button>
           </div>
@@ -1349,9 +1364,11 @@ async function loadAccounts() {
   try {
     const archived = SHOW_ARCHIVED_ACCOUNTS ? 'only' : '0';
     const plan = SHOW_PLUS_ACCOUNTS_ONLY ? 'plus' : '';
+    const twofa = $('#accountTwofaFilter')?.value || '';
+    const password = $('#accountPasswordFilter')?.value || '';
     const q = $('#qAccounts') ? $('#qAccounts').value.trim() : '';
     const p = PAGERS.accounts;
-    const res = await api(`/api/accounts?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&q=${encodeURIComponent(q)}`);
+    const res = await api(`/api/accounts?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&twofa=${encodeURIComponent(twofa)}&password=${encodeURIComponent(password)}&q=${encodeURIComponent(q)}`);
     ACCOUNTS = res.items || [];
     ACCOUNTS_TOTAL = Number(res.total || ACCOUNTS.length || 0);
     const totalPages = Math.max(1, Math.ceil(ACCOUNTS_TOTAL / p.size));
@@ -1366,9 +1383,11 @@ async function pollAccountPlanStatuses() {
   try {
     const archived = SHOW_ARCHIVED_ACCOUNTS ? 'only' : '0';
     const plan = SHOW_PLUS_ACCOUNTS_ONLY ? 'plus' : '';
+    const twofa = $('#accountTwofaFilter')?.value || '';
+    const password = $('#accountPasswordFilter')?.value || '';
     const q = $('#qAccounts') ? $('#qAccounts').value.trim() : '';
     const p = PAGERS.accounts;
-    const snapshot = await api(`/api/accounts/plan-check-status?page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&q=${encodeURIComponent(q)}`);
+    const snapshot = await api(`/api/accounts/plan-check-status?page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&twofa=${encodeURIComponent(twofa)}&password=${encodeURIComponent(password)}&q=${encodeURIComponent(q)}`);
     const items = snapshot.items || [];
     const accountById = new Map(ACCOUNTS.map(r => [Number(r.id), r]));
     const hasUnknown = items.some(item => !accountById.has(Number(item.id)));
@@ -1901,6 +1920,15 @@ $('#showPlusAccountsOnly').addEventListener('change', async (e) => {
   await loadAccounts();
   await pollAccountPlanStatuses();
 });
+for (const selector of ['#accountTwofaFilter', '#accountPasswordFilter']) {
+  $(selector).addEventListener('change', async () => {
+    ACCOUNT_SELECTED.clear();
+    PAGERS.accounts.page = 1;
+    planStatusRevision = '';
+    await loadAccounts();
+    await pollAccountPlanStatuses();
+  });
+}
 $('#btnRefreshAccounts').addEventListener('click', async () => {
   const btn = $('#btnRefreshAccounts');
   const old = btn.textContent;

@@ -581,6 +581,26 @@ def _account_matches_plan_filter(row: dict, plan_filter: str | None = None) -> b
     return plan == f
 
 
+def _account_matches_material_filters(
+    row: dict,
+    twofa_filter: str | None = None,
+    password_filter: str | None = None,
+) -> bool:
+    twofa = str(twofa_filter or "").strip().lower()
+    password = str(password_filter or "").strip().lower()
+    has_twofa = bool(str(row.get("totp_secret") or "").strip())
+    has_password = bool(str(row.get("registration_password") or "").strip())
+    if twofa in {"enabled", "with", "yes", "1"} and not has_twofa:
+        return False
+    if twofa in {"disabled", "without", "no", "0"} and has_twofa:
+        return False
+    if password in {"present", "with", "yes", "1"} and not has_password:
+        return False
+    if password in {"missing", "without", "no", "0"} and has_password:
+        return False
+    return True
+
+
 def _decorate_outlook(row: dict, account_by_email: dict[str, dict] | None = None) -> dict:
     out = dict(row)
     out["copy_line"] = _outlook_line(out)
@@ -1234,7 +1254,13 @@ def _account_matches_query(row: dict, q: str | None) -> bool:
         return False
 
 
-def _filtered_decorated_accounts(archived: str | bool | None = False, plan_filter: str | None = None, q: str | None = None) -> list[dict]:
+def _filtered_decorated_accounts(
+    archived: str | bool | None = False,
+    plan_filter: str | None = None,
+    q: str | None = None,
+    twofa_filter: str | None = None,
+    password_filter: str | None = None,
+) -> list[dict]:
     rows = _load_accounts()
     if archived in (True, "1", "true", "yes", "only"):
         rows = [r for r in rows if bool(r.get("archived"))]
@@ -1244,11 +1270,20 @@ def _filtered_decorated_accounts(archived: str | bool | None = False, plan_filte
         rows = [r for r in rows if not bool(r.get("archived"))]
     decorated = [_decorate_account(r) for r in rows]
     decorated = [r for r in decorated if _account_matches_plan_filter(r, plan_filter)]
+    decorated = [r for r in decorated if _account_matches_material_filters(r, twofa_filter, password_filter)]
     decorated = [r for r in decorated if _account_matches_query(r, q)]
     return sorted(decorated, key=lambda x: int(x.get("id") or 0), reverse=True)
 
 
-def list_account_plan_check_statuses(limit: int = 5000, offset: int = 0, archived: str | bool | None = False, plan_filter: str | None = None, q: str | None = None) -> dict:
+def list_account_plan_check_statuses(
+    limit: int = 5000,
+    offset: int = 0,
+    archived: str | bool | None = False,
+    plan_filter: str | None = None,
+    q: str | None = None,
+    twofa_filter: str | None = None,
+    password_filter: str | None = None,
+) -> dict:
     """返回不含 Token/邮箱密码的套餐查询轻量状态快照。"""
     fields = (
         "id", "email", "archived",
@@ -1274,7 +1309,13 @@ def list_account_plan_check_statuses(limit: int = 5000, offset: int = 0, archive
         "twofa_task_completed_at", "twofa_task_proxy_used",
     )
     with _LOCK:
-        all_rows = _filtered_decorated_accounts(archived=archived, plan_filter=plan_filter, q=q)
+        all_rows = _filtered_decorated_accounts(
+            archived=archived,
+            plan_filter=plan_filter,
+            q=q,
+            twofa_filter=twofa_filter,
+            password_filter=password_filter,
+        )
         total = len(all_rows)
         limit = max(1, int(limit))
         offset = max(0, int(offset or 0))
@@ -1327,15 +1368,43 @@ def list_account_plan_check_statuses(limit: int = 5000, offset: int = 0, archive
         return {"items": items, "total": total, "offset": offset, "limit": limit, "revision": f"{total}:{latest}:{revision_sig}"}
 
 
-def list_accounts(limit: int = 500, offset: int = 0, archived: str | bool | None = False, plan_filter: str | None = None, q: str | None = None) -> list[dict]:
+def list_accounts(
+    limit: int = 500,
+    offset: int = 0,
+    archived: str | bool | None = False,
+    plan_filter: str | None = None,
+    q: str | None = None,
+    twofa_filter: str | None = None,
+    password_filter: str | None = None,
+) -> list[dict]:
     with _LOCK:
-        rows = _filtered_decorated_accounts(archived=archived, plan_filter=plan_filter, q=q)
+        rows = _filtered_decorated_accounts(
+            archived=archived,
+            plan_filter=plan_filter,
+            q=q,
+            twofa_filter=twofa_filter,
+            password_filter=password_filter,
+        )
         return rows[max(0, int(offset or 0)): max(0, int(offset or 0)) + max(1, int(limit))]
 
 
-def list_accounts_page(limit: int = 50, offset: int = 0, archived: str | bool | None = False, plan_filter: str | None = None, q: str | None = None) -> dict:
+def list_accounts_page(
+    limit: int = 50,
+    offset: int = 0,
+    archived: str | bool | None = False,
+    plan_filter: str | None = None,
+    q: str | None = None,
+    twofa_filter: str | None = None,
+    password_filter: str | None = None,
+) -> dict:
     with _LOCK:
-        rows = _filtered_decorated_accounts(archived=archived, plan_filter=plan_filter, q=q)
+        rows = _filtered_decorated_accounts(
+            archived=archived,
+            plan_filter=plan_filter,
+            q=q,
+            twofa_filter=twofa_filter,
+            password_filter=password_filter,
+        )
         total = len(rows)
         limit = max(1, int(limit))
         offset = max(0, int(offset or 0))

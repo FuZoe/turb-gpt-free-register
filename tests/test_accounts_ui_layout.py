@@ -33,3 +33,12 @@ def test_accounts_ui_exposes_queued_twofa_automation():
     assert '/api/accounts/create-2fa' in text
     assert '2FA排队' in text
     assert '创建2FA中' in text
+
+
+def test_accounts_ui_exposes_twofa_and_password_filters():
+    text = TEMPLATE.read_text(encoding="utf-8")
+
+    assert 'id="accountTwofaFilter"' in text
+    assert 'id="accountPasswordFilter"' in text
+    assert 'twofa=${encodeURIComponent(twofa)}' in text
+    assert 'password=${encodeURIComponent(password)}' in text

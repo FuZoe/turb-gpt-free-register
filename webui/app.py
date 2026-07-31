@@ -290,6 +290,8 @@ def create_app(auth_code: str | None = None) -> Flask:
         limit = request.args.get("limit", default=500, type=int)
         archived = str(request.args.get("archived", default="0") or "0").lower()
         plan_filter = str(request.args.get("plan", default="") or "").lower()
+        twofa_filter = str(request.args.get("twofa", default="") or "").lower()
+        password_filter = str(request.args.get("password", default="") or "").lower()
         q = str(request.args.get("q", default="") or "").strip()
         # 新分页接口：传 page/page_size 或 paged=1 时返回 {items,total,page,page_size,...}
         paged = str(request.args.get("paged", default="") or "").lower() in {"1", "true", "yes"}
@@ -299,11 +301,26 @@ def create_app(auth_code: str | None = None) -> Flask:
             page = max(1, int(page_arg or 1))
             page_size = max(1, min(500, int(page_size_arg or limit or 50)))
             offset = (page - 1) * page_size
-            result = db.list_accounts_page(limit=page_size, offset=offset, archived=archived, plan_filter=plan_filter, q=q)
+            result = db.list_accounts_page(
+                limit=page_size,
+                offset=offset,
+                archived=archived,
+                plan_filter=plan_filter,
+                q=q,
+                twofa_filter=twofa_filter,
+                password_filter=password_filter,
+            )
             result["items"] = [_compact_account_for_list(r) for r in (result.get("items") or [])]
             result.update({"ok": True, "page": page, "page_size": page_size, "compact": True})
             return jsonify(result)
-        return jsonify(db.list_accounts(limit=limit, archived=archived, plan_filter=plan_filter, q=q))
+        return jsonify(db.list_accounts(
+            limit=limit,
+            archived=archived,
+            plan_filter=plan_filter,
+            q=q,
+            twofa_filter=twofa_filter,
+            password_filter=password_filter,
+        ))
 
     @app.get("/api/accounts/plan-check-status")
     def api_account_plan_check_status():
@@ -311,6 +328,8 @@ def create_app(auth_code: str | None = None) -> Flask:
         limit = request.args.get("limit", default=5000, type=int)
         archived = str(request.args.get("archived", default="0") or "0").lower()
         plan_filter = str(request.args.get("plan", default="") or "").lower()
+        twofa_filter = str(request.args.get("twofa", default="") or "").lower()
+        password_filter = str(request.args.get("password", default="") or "").lower()
         q = str(request.args.get("q", default="") or "").strip()
         page_arg = request.args.get("page", default=None, type=int)
         page_size_arg = request.args.get("page_size", default=None, type=int)
@@ -318,10 +337,25 @@ def create_app(auth_code: str | None = None) -> Flask:
             page = max(1, int(page_arg or 1))
             page_size = max(1, min(500, int(page_size_arg or limit or 50)))
             offset = (page - 1) * page_size
-            snapshot = db.list_account_plan_check_statuses(limit=page_size, offset=offset, archived=archived, plan_filter=plan_filter, q=q)
+            snapshot = db.list_account_plan_check_statuses(
+                limit=page_size,
+                offset=offset,
+                archived=archived,
+                plan_filter=plan_filter,
+                q=q,
+                twofa_filter=twofa_filter,
+                password_filter=password_filter,
+            )
             snapshot.update({"page": page, "page_size": page_size})
         else:
-            snapshot = db.list_account_plan_check_statuses(limit=max(1, min(5000, limit)), archived=archived, plan_filter=plan_filter, q=q)
+            snapshot = db.list_account_plan_check_statuses(
+                limit=max(1, min(5000, limit)),
+                archived=archived,
+                plan_filter=plan_filter,
+                q=q,
+                twofa_filter=twofa_filter,
+                password_filter=password_filter,
+            )
         snapshot["queue"] = plan_check_service.queue_settings()
         return jsonify(snapshot)
 
