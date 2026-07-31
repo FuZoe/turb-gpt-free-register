@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import Any
 
 from config import cloakbrowser as _cfg
@@ -13,27 +14,112 @@ from core.cloakbrowser_registration import (
 )
 from core.cloakbrowser_session import setup_cloak_2fa
 from core.email_provider import wait_for_otp
-from core.roxy_codex_oauth import _CODEX_BROWSER_KIND, _fill_email_and_otp
-from core.roxy_registration import _fetch_chatgpt_session, is_cloudflare_challenge_error
+from core.roxy_codex_oauth import _wait_after_email_otp_submit
+from core.roxy_registration import (
+    _clear_otp_inputs,
+    _click_continue,
+    _click_passwordless_signup_if_present,
+    _fetch_chatgpt_session,
+    _is_email_verification_page,
+    _maybe_accept,
+    _submit_email_and_wait_next,
+    _type_otp,
+    is_cloudflare_challenge_error,
+)
 from core.tenant_context import current_tenant, tenant_scope
 
 logger = logging.getLogger(__name__)
 
 
-def _run_existing_account_twofa_impl(email: str, proxy: str | None = None) -> dict:
+def _fill_existing_login_password(driver: Any, password: str, timeout: int = 60) -> None:
+    result = driver.execute_script(
+        r"""
+        const password = String(arguments[0] || '');
+        const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+          && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none'
+          && !el.disabled && !el.readOnly;
+        const input = [...document.querySelectorAll('input[type="password"],input[autocomplete*="current-password"]')].find(visible);
+        if (!input) return {ok:false, reason:'missing_password_input'};
+        input.focus();
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+        if (setter) setter.call(input, password); else input.value = password;
+        input.dispatchEvent(new Event('input', {bubbles:true}));
+        input.dispatchEvent(new Event('change', {bubbles:true}));
+        const form = input.closest('form');
+        const buttons = [...(form || document).querySelectorAll('button[type="submit"],input[type="submit"]')].filter(visible);
+        if (!buttons.length) return {ok:false, reason:'missing_submit'};
+        buttons[0].click();
+        return {ok:true};
+        """,
+        password,
+    ) or {}
+    if not result.get("ok"):
+        raise RuntimeError(f"登录密码填写失败: {result}")
+    end = time.time() + timeout
+    while time.time() < end:
+        if "/log-in/password" not in str(getattr(driver, "current_url", "") or "").lower():
+            logger.info("[2FA补跑] 密码登录已离开登录密码页")
+            return
+        time.sleep(0.5)
+    raise RuntimeError("提交登录密码后页面未跳转，请检查保存的密码是否正确")
+
+
+def _wait_for_email_otp_page(driver: Any, timeout: int = 30) -> None:
+    end = time.time() + timeout
+    while time.time() < end:
+        if _is_email_verification_page(driver):
+            return
+        time.sleep(0.25)
+    raise RuntimeError(f"点击一次性验证码登录后未进入邮箱验证码页: url={getattr(driver, 'current_url', '')}")
+
+
+def _login_existing_account(driver: Any, email: str, password: str | None) -> None:
+    login_otp_after_ts = time.time()
+    driver.get("https://chatgpt.com/auth/login")
+    _maybe_accept(driver)
+    state = _submit_email_and_wait_next(
+        driver,
+        email,
+        attempts=3,
+        allow_login_password=True,
+    )
+    if state == "logged_in":
+        return
+    if state == "login_password" and password:
+        logger.info("[2FA补跑] 使用已保存的 ChatGPT 密码登录：%s", email)
+        _fill_existing_login_password(driver, password)
+        return
+    if state == "login_password":
+        login_otp_after_ts = time.time()
+        clicked = _click_passwordless_signup_if_present(driver)
+        if not clicked.get("ok"):
+            raise RuntimeError(f"账号没有保存密码，且未找到一次性验证码登录入口: {clicked}")
+        _wait_for_email_otp_page(driver)
+    elif state != "otp":
+        raise RuntimeError(f"已有账号登录进入未知状态: {state}")
+
+    logger.info("[2FA补跑] 等待账号登录 OTP：%s", email)
+    code = wait_for_otp(email, after_ts=login_otp_after_ts)
+    _clear_otp_inputs(driver)
+    _type_otp(driver, code)
+    _click_continue(driver)
+    outcome = _wait_after_email_otp_submit(driver, timeout=45)
+    if outcome != "accepted":
+        raise RuntimeError(f"账号登录 OTP 未通过: {outcome}")
+
+
+def _run_existing_account_twofa_impl(
+    email: str,
+    password: str | None = None,
+    proxy: str | None = None,
+) -> dict:
     driver = None
     opened = None
-    browser_kind_token = _CODEX_BROWSER_KIND.set("Cloak")
     try:
         driver, opened = build_cloak_driver(proxy=proxy)
         proxy_used = ((opened.raw or {}).get("proxy") if opened else None) or proxy or None
         logger.info("[2FA补跑] 开始登录已有账号：%s proxy=%s", email, proxy_used or "无")
-        _fill_email_and_otp(
-            driver,
-            email,
-            wait_for_otp,
-            "https://chatgpt.com/auth/login",
-        )
+        _login_existing_account(driver, email, password)
         session_info = _fetch_chatgpt_session(driver, timeout=120)
         user = session_info.get("user") if isinstance(session_info, dict) else {}
         if isinstance(user, dict) and bool(user.get("mfa")):
@@ -70,7 +156,6 @@ def _run_existing_account_twofa_impl(email: str, proxy: str | None = None) -> di
             "message": "创建 2FA 失败",
         }
     finally:
-        _CODEX_BROWSER_KIND.reset(browser_kind_token)
         if driver and not bool(_cfg.CLOAK_KEEP_BROWSER_OPEN):
             try:
                 driver.quit()
@@ -78,7 +163,11 @@ def _run_existing_account_twofa_impl(email: str, proxy: str | None = None) -> di
                 pass
 
 
-def run_existing_account_twofa(email: str, proxy: str | None = None) -> dict:
+def run_existing_account_twofa(
+    email: str,
+    password: str | None = None,
+    proxy: str | None = None,
+) -> dict:
     """Run one Playwright lifecycle in a fresh thread while preserving tenant context."""
     result_box: dict[str, Any] = {}
     error_box: dict[str, BaseException] = {}
@@ -88,7 +177,11 @@ def run_existing_account_twofa(email: str, proxy: str | None = None) -> dict:
     def _target() -> None:
         try:
             with tenant_scope(tenant_id):
-                result_box["value"] = _run_existing_account_twofa_impl(email=email, proxy=proxy)
+                result_box["value"] = _run_existing_account_twofa_impl(
+                    email=email,
+                    password=password,
+                    proxy=proxy,
+                )
         except BaseException as exc:  # noqa: BLE001 - preserve cross-thread exception
             error_box["error"] = exc
 

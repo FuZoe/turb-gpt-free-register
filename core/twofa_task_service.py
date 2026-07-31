@@ -34,7 +34,11 @@ def _run_twofa_task(account_id: int, email: str) -> dict:
             return {"ok": False, "error": "账号已删除或 2FA 任务状态已被重置"}
         from core.cloakbrowser_twofa import run_existing_account_twofa
 
-        result = run_existing_account_twofa(email=email)
+        account = db.get_account(account_id) or {}
+        result = run_existing_account_twofa(
+            email=email,
+            password=str(account.get("registration_password") or "").strip() or None,
+        )
         result.setdefault("checked_at", datetime.now().isoformat(timespec="seconds"))
         db.update_account_twofa_task(account_id, result)
         return result

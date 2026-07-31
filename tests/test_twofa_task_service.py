@@ -62,3 +62,33 @@ def test_twofa_queue_preserves_submitting_tenant(monkeypatch):
 
     assert result["accepted"] is True
     assert seen == ["tenant2"]
+
+
+def test_twofa_runner_passes_saved_registration_password(monkeypatch):
+    captured = {}
+    queue_slots = threading.BoundedSemaphore(1)
+    queue_slots.acquire()
+    monkeypatch.setattr(service, "_QUEUE_SLOTS", queue_slots)
+    monkeypatch.setattr(service.db, "mark_account_twofa_task_running", lambda _account_id: True)
+    monkeypatch.setattr(
+        service.db,
+        "get_account",
+        lambda _account_id: {"registration_password": "saved-password"},
+    )
+    monkeypatch.setattr(service.db, "update_account_twofa_task", lambda *_args: True)
+
+    from core import cloakbrowser_twofa
+
+    monkeypatch.setattr(
+        cloakbrowser_twofa,
+        "run_existing_account_twofa",
+        lambda **kwargs: captured.update(kwargs) or {"ok": True, "status": "success"},
+    )
+
+    result = service._run_twofa_task(1, "user@example.test")
+
+    assert result["ok"] is True
+    assert captured == {
+        "email": "user@example.test",
+        "password": "saved-password",
+    }
