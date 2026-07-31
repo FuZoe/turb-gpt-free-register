@@ -14,7 +14,7 @@ from core.account_export import save_account_data
 from core.cloakbrowser_driver import build_cloak_driver
 from core.email_provider import wait_for_otp, resolve_email_source
 from core.humanize import delay as human_delay
-from core.tenant_context import tenant_path
+from core.tenant_context import current_tenant, tenant_path, tenant_scope
 
 # 复用 Roxy 注册流程里已维护好的页面操作函数。
 from core.roxy_registration import (  # noqa: F401
@@ -288,17 +288,19 @@ def run_cloak_registration(email: str, name: str, birthday: str, proxy: str = No
     result_box: dict = {}
     error_box: dict = {}
     parent_thread_name = threading.current_thread().name
+    tenant_id = current_tenant()
 
     def _target() -> None:
         try:
-            result_box["value"] = _run_cloak_registration_impl(
-                email=email,
-                name=name,
-                birthday=birthday,
-                proxy=proxy,
-                otp_code=otp_code,
-                batch_dir=batch_dir,
-            )
+            with tenant_scope(tenant_id):
+                result_box["value"] = _run_cloak_registration_impl(
+                    email=email,
+                    name=name,
+                    birthday=birthday,
+                    proxy=proxy,
+                    otp_code=otp_code,
+                    batch_dir=batch_dir,
+                )
         except BaseException as exc:  # noqa: BLE001 - 跨线程原样回传
             error_box["error"] = exc
 
