@@ -818,7 +818,7 @@
   <div class="table-wrap">
     <table class="auto-task-table">
       <colgroup><col class="col-check"><col class="col-id"><col><col class="col-status"></colgroup>
-      <thead><tr><th></th><th>ID</th><th>邮箱</th><th>状态</th></tr></thead>
+      <thead><tr><th><input type="checkbox" id="autoTaskSelectAll" title="全选/取消全选全部候选账号"></th><th>ID</th><th>邮箱</th><th>状态</th></tr></thead>
       <tbody id="autoTaskAccountsBody"><tr><td colspan="4" class="muted">加载中…</td></tr></tbody>
     </table>
   </div>
@@ -872,6 +872,7 @@ const AUTO_TASK_PAGE_SIZE = 20;
 const AUTO_TASK_SELECTED = new Set();
 let autoTaskLoading = false;
 let autoTaskTimer = null;
+let autoTaskSelectAll = false;
 let JOBS = [];
 let JOBS_TOTAL = 0;
 let JOB_STATUS_COUNTS = {};
@@ -1246,6 +1247,11 @@ function renderAutoTaskAccounts() {
   const eligible = AUTO_TASK_ACCOUNTS.filter(row => !autoTaskRowBusy(row));
   const allSelected = eligible.length > 0 && eligible.every(row => AUTO_TASK_SELECTED.has(Number(row.id)));
   $('#btnSelectAutoTaskPage').textContent = allSelected ? '取消当前页' : '全选当前页';
+  const selectAll = $('#autoTaskSelectAll');
+  if (selectAll) {
+    selectAll.checked = autoTaskSelectAll;
+    selectAll.indeterminate = !autoTaskSelectAll && eligible.some(row => AUTO_TASK_SELECTED.has(Number(row.id)));
+  }
 }
 async function loadAutoTaskAccounts() {
   if (autoTaskLoading) return;
@@ -1267,12 +1273,49 @@ async function loadAutoTaskAccounts() {
 }
 function openAutoTaskPanel() {
   AUTO_TASK_SELECTED.clear();
+  autoTaskSelectAll = false;
   AUTO_TASK_PAGE = 1;
   $('#autoTaskPanel').classList.remove('hidden');
   updateModalScrollLock();
   loadAutoTaskAccounts();
   clearInterval(autoTaskTimer);
   autoTaskTimer = setInterval(loadAutoTaskAccounts, 5000);
+}
+async function fetchAllAutoTaskCandidateIds() {
+  const config = autoTaskConfig();
+  const q = $('#qAutoTaskAccounts').value.trim();
+  const ids = [];
+  let page = 1;
+  let totalPages = 1;
+  do {
+    const res = await api(`/api/accounts?paged=1&page=${page}&page_size=500&archived=0&${config.query}&q=${encodeURIComponent(q)}`);
+    const rows = res.items || [];
+    rows.forEach(row => { if (!autoTaskRowBusy(row)) ids.push(Number(row.id)); });
+    totalPages = Math.max(1, Math.ceil(Number(res.total || rows.length || 0) / 500));
+    page += 1;
+  } while (page <= totalPages);
+  return ids;
+}
+async function toggleAutoTaskSelectAll(checked) {
+  const selectAll = $('#autoTaskSelectAll');
+  if (selectAll) selectAll.disabled = true;
+  try {
+    if (checked) {
+      const ids = await fetchAllAutoTaskCandidateIds();
+      ids.forEach(id => AUTO_TASK_SELECTED.add(id));
+      autoTaskSelectAll = true;
+    } else {
+      const ids = await fetchAllAutoTaskCandidateIds();
+      ids.forEach(id => AUTO_TASK_SELECTED.delete(id));
+      autoTaskSelectAll = false;
+    }
+  } catch (err) {
+    if (selectAll) selectAll.checked = autoTaskSelectAll;
+    showToast(`全选候选账号失败: ${err.message}`);
+  } finally {
+    if (selectAll) selectAll.disabled = false;
+    renderAutoTaskAccounts();
+  }
 }
 function closeAutoTaskPanel() {
   clearInterval(autoTaskTimer);
@@ -1298,6 +1341,7 @@ async function submitAutoTasks() {
     const skipped = Number(result.skipped_count || (result.skipped || []).length || 0);
     showToast(skipped ? `已入队 ${started} 个，跳过 ${skipped} 个` : `已入队 ${started} 个任务`);
     AUTO_TASK_SELECTED.clear();
+    autoTaskSelectAll = false;
     await loadAutoTaskAccounts();
     loadAccounts();
   } catch (err) {
@@ -1311,11 +1355,12 @@ $('#btnOpenAutoTask').addEventListener('click', openAutoTaskPanel);
 $('#btnCloseAutoTask').addEventListener('click', closeAutoTaskPanel);
 $('#btnSubmitAutoTask').addEventListener('click', submitAutoTasks);
 $('#qAutoTaskAccounts').addEventListener('input', debounce(() => {
-  AUTO_TASK_SELECTED.clear(); AUTO_TASK_PAGE = 1; loadAutoTaskAccounts();
+  AUTO_TASK_SELECTED.clear(); autoTaskSelectAll = false; AUTO_TASK_PAGE = 1; loadAutoTaskAccounts();
 }, 250));
 $$('input[name="autoTaskMode"]').forEach(input => input.addEventListener('change', () => {
   AUTO_TASK_MODE = input.value;
   AUTO_TASK_SELECTED.clear();
+  autoTaskSelectAll = false;
   AUTO_TASK_PAGE = 1;
   loadAutoTaskAccounts();
 }));
@@ -1330,8 +1375,10 @@ $('#btnSelectAutoTaskPage').addEventListener('click', () => {
   const eligible = AUTO_TASK_ACCOUNTS.filter(row => !autoTaskRowBusy(row));
   const allSelected = eligible.length > 0 && eligible.every(row => AUTO_TASK_SELECTED.has(Number(row.id)));
   eligible.forEach(row => allSelected ? AUTO_TASK_SELECTED.delete(Number(row.id)) : AUTO_TASK_SELECTED.add(Number(row.id)));
+  autoTaskSelectAll = false;
   renderAutoTaskAccounts();
 });
+$('#autoTaskSelectAll').addEventListener('change', e => toggleAutoTaskSelectAll(e.target.checked));
 $('#btnAutoTaskPrev').addEventListener('click', () => { AUTO_TASK_PAGE = Math.max(1, AUTO_TASK_PAGE - 1); loadAutoTaskAccounts(); });
 $('#btnAutoTaskNext').addEventListener('click', () => { AUTO_TASK_PAGE += 1; loadAutoTaskAccounts(); });
 
