@@ -59,3 +59,13 @@ def test_accounts_ui_exposes_twofa_and_password_filters():
     assert 'id="accountPasswordFilter"' in text
     assert 'twofa=${encodeURIComponent(twofa)}' in text
     assert 'password=${encodeURIComponent(password)}' in text
+
+
+def test_email_pool_ui_exposes_status_filter():
+    text = TEMPLATE.read_text(encoding="utf-8")
+
+    assert 'id="poolStatus"' in text
+    assert '<option value="available">可用</option>' in text
+    assert '<option value="used">已用</option>' in text
+    assert '<option value="failed">失败</option>' in text
+    assert 'status=${encodeURIComponent(status)}' in text

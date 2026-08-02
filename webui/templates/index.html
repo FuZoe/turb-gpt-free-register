@@ -706,6 +706,12 @@
               <option value="generic_api">通用 API 邮箱池</option>
               <option value="cloudflare_domain">域名邮箱池</option>
             </select>
+            <select id="poolStatus" style="flex:0 0 140px;margin-top:0;" title="按邮箱状态筛选">
+              <option value="">全部状态</option>
+              <option value="available">可用</option>
+              <option value="used">已用</option>
+              <option value="failed">失败</option>
+            </select>
             <input id="qOutlook" placeholder="搜索邮箱、状态…">
           </div>
         </div>
@@ -2791,9 +2797,10 @@ function poolLabel(src) {
 async function loadOutlook() {
   try {
     const source = $('#poolSource')?.value || 'outlook';
+    const status = $('#poolStatus')?.value || '';
     const q = $('#qOutlook') ? $('#qOutlook').value.trim() : '';
     const p = PAGERS.outlook;
-    const res = await api(`/api/outlook?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&source=${encodeURIComponent(source)}&q=${encodeURIComponent(q)}`);
+    const res = await api(`/api/outlook?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&source=${encodeURIComponent(source)}&status=${encodeURIComponent(status)}&q=${encodeURIComponent(q)}`);
     OUTLOOK = res.items || [];
     OUTLOOK_TOTAL = Number(res.total || OUTLOOK.length || 0);
     const totalPages = Math.max(1, Math.ceil(OUTLOOK_TOTAL / p.size));
@@ -2858,6 +2865,11 @@ $('#poolSource').addEventListener('change', () => {
   PAGERS.outlook.page = 1;
   OUTLOOK_SELECTED.clear();
   if ($('#poolSource').value !== 'all' && $('#poolSource').value !== 'cloudflare_domain') $('#importSource').value = $('#poolSource').value;
+  loadOutlook();
+});
+$('#poolStatus').addEventListener('change', () => {
+  PAGERS.outlook.page = 1;
+  OUTLOOK_SELECTED.clear();
   loadOutlook();
 });
 $('#importSource').addEventListener('change', () => {
