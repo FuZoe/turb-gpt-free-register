@@ -71,3 +71,12 @@ def test_email_pool_ui_exposes_status_filter():
     assert '<option value="used">已用</option>' in text
     assert '<option value="failed">失败</option>' in text
     assert 'status=${encodeURIComponent(status)}' in text
+
+
+def test_runtime_resource_box_supports_drag_and_resize():
+    text = TEMPLATE.read_text(encoding="utf-8")
+
+    assert 'initRuntimeResourceBox' in text
+    assert 'resize: both' in text
+    assert 'cursor:grab' in text
+    assert "'turb_runtime_box_bounds'" in text

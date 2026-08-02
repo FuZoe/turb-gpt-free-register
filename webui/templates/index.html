@@ -51,8 +51,14 @@
       padding: 10px 12px; border: 1px solid #cad5e2; border-radius: 10px;
       background: rgba(255,255,255,.96); box-shadow: 0 8px 24px rgba(15,23,42,.16);
       backdrop-filter: blur(8px); font-size: 12px; color: #344054;
+      touch-action: none; user-select: none; -webkit-user-select: none;
+      resize: both; overflow: hidden; min-width: 220px; min-height: 92px;
+      max-width: min(560px, calc(100vw - 24px)); max-height: min(420px, calc(100vh - 24px));
     }
-    .runtime-resource-head { display:flex; justify-content:space-between; align-items:center; gap:8px; font-weight:900; }
+    .runtime-resource-head { display:flex; justify-content:space-between; align-items:center; gap:8px; font-weight:900; cursor:grab; }
+    .runtime-resource.dragging .runtime-resource-head { cursor:grabbing; }
+    .runtime-resource.dragging { box-shadow: 0 14px 34px rgba(15,23,42,.28); }
+    .runtime-resource-head .runtime-resource-grip { color:#98a2b3; font-size:11px; font-weight:800; letter-spacing:1px; }
     .runtime-resource-value { color:#172033; font-family:ui-monospace,Consolas,monospace; }
     .runtime-resource-bar { height:7px; margin:7px 0 6px; overflow:hidden; border-radius:999px; background:#e8eef5; }
     .runtime-resource-bar i { display:block; width:0; height:100%; border-radius:inherit; background:#16803c; transition:width .3s ease,background .3s ease; }
@@ -1218,6 +1224,89 @@ function autoTaskConfig() {
     password: {label:'创建密码', query:'password=missing', endpoint:'/api/accounts/create-password-bulk'},
     codex: {label:'补跑Codex', query:'codex=incomplete', endpoint:'/api/codex/retry-bulk'},
   }[AUTO_TASK_MODE];
+}
+
+function initRuntimeResourceBox() {
+  const box = $('#runtimeResource');
+  const head = box.querySelector('.runtime-resource-head');
+  const grip = document.createElement('span');
+  grip.className = 'runtime-resource-grip';
+  grip.textContent = '⠿ 拖动/缩放';
+  head.appendChild(grip);
+  const STORE = 'turb_runtime_box_bounds';
+  const clamp = (x, y, w, h) => {
+    const vw = window.innerWidth, vh = window.innerHeight;
+    w = Math.max(220, Math.min(w, vw - 16));
+    h = Math.max(92, Math.min(h, vh - 16));
+    x = Math.max(8, Math.min(x, vw - w - 8));
+    y = Math.max(8, Math.min(y, vh - h - 8));
+    return { x, y, w, h };
+  };
+  const apply = (b) => {
+    box.style.left = `${b.x}px`;
+    box.style.top = `${b.y}px`;
+    box.style.width = `${b.w}px`;
+    box.style.height = `${b.h}px`;
+    box.style.right = 'auto';
+    box.style.bottom = 'auto';
+  };
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(STORE) || 'null'); } catch (e) {}
+  if (saved && Number(saved.w) >= 220 && Number(saved.h) >= 92) {
+    apply(clamp(Number(saved.x) || 12, Number(saved.y) || 12, Number(saved.w), Number(saved.h)));
+  }
+  let persistQueued = false;
+  const persist = () => {
+    const r = box.getBoundingClientRect();
+    const b = clamp(r.left, r.top, r.width, r.height);
+    try { localStorage.setItem(STORE, JSON.stringify(b)); } catch (e) {}
+  };
+  const persistSoon = () => {
+    if (persistQueued) return;
+    persistQueued = true;
+    requestAnimationFrame(() => { persistQueued = false; persist(); });
+  };
+  if (window.ResizeObserver) {
+    new ResizeObserver(persistSoon).observe(box);
+  }
+  window.addEventListener('resize', () => {
+    const r = box.getBoundingClientRect();
+    apply(clamp(r.left, r.top, r.width, r.height));
+    persist();
+  });
+  let drag = null;
+  head.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('button, a, input, select, textarea')) return;
+    if (e.button !== 0) return;
+    const r = box.getBoundingClientRect();
+    drag = { startX: e.clientX, startY: e.clientY, baseX: r.left, baseY: r.top };
+    box.classList.add('dragging');
+    head.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  head.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const r = box.getBoundingClientRect();
+    const b = clamp(
+      drag.baseX + e.clientX - drag.startX,
+      drag.baseY + e.clientY - drag.startY,
+      r.width,
+      r.height,
+    );
+    box.style.left = `${b.x}px`;
+    box.style.top = `${b.y}px`;
+    box.style.right = 'auto';
+    box.style.bottom = 'auto';
+  });
+  const endDrag = (e) => {
+    if (!drag) return;
+    drag = null;
+    box.classList.remove('dragging');
+    try { head.releasePointerCapture(e.pointerId); } catch (err) {}
+    persist();
+  };
+  head.addEventListener('pointerup', endDrag);
+  head.addEventListener('pointercancel', endDrag);
 }
 function autoTaskRowBusy(row) {
   if (AUTO_TASK_MODE === 'twofa') return ['queued','running'].includes(row.twofa_task_status || '');
@@ -3949,6 +4038,7 @@ document.addEventListener('click', (e) => {
 // ---------- 初始化 ----------
 loadSummary();
 loadRuntimeResources();
+initRuntimeResourceBox();
 activateTab(localStorage.getItem('gpt_console_active_tab') || 'register', false);
 jobsTimer = setInterval(() => { if (!$('#tab-register').classList.contains('hidden')) refreshJobs(); }, 3000);
 setInterval(loadSummary, 5000);
