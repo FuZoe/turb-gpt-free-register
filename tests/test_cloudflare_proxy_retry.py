@@ -1,6 +1,7 @@
 from config import proxy as proxy_cfg
 from core import registration_service as service
 from core import roxy_registration as reg
+from core import roxy_codex_oauth as codex_oauth
 import pytest
 
 
@@ -80,6 +81,44 @@ def test_navigation_timeout_creates_tracked_auto_retry(monkeypatch):
 
 def test_unrelated_timeout_does_not_rotate_proxy():
     assert service._is_proxy_navigation_failure("等待 OTP 输入框超时") is False
+
+
+def test_wrapped_browser_error_page_rotates_proxy():
+    assert service._is_proxy_navigation_failure(
+        "RuntimeError: state={'url': 'chrome-error://chromewebdata/', 'text': 'ERR_CONNECTION_CLOSED'}"
+    ) is True
+
+
+@pytest.mark.parametrize("error", [
+    "SSLError: Failed to perform, curl: (35) TLS connect error",
+    "CurlError: Failed to perform, curl: (52) Empty reply from server",
+    "ConnectionError: Failed to perform, curl: (56) Recv failure",
+])
+def test_curl_proxy_transport_error_rotates_proxy(error):
+    assert service._is_proxy_navigation_failure(error) is True
+
+
+def test_otp_wait_ignores_diagnostic_script_noise_until_navigation(monkeypatch):
+    class Driver:
+        calls = 0
+
+        @property
+        def current_url(self):
+            self.calls += 1
+            return "https://auth.openai.com/email-verification" if self.calls == 1 else "https://chatgpt.com/"
+
+    monkeypatch.setattr(codex_oauth, "_read_email_otp_validate_dead_code", lambda _driver: "")
+    monkeypatch.setattr(codex_oauth, "_is_callback_url", lambda _url: False)
+    monkeypatch.setattr(codex_oauth, "_has_strict_add_phone_form", lambda _driver: False)
+    monkeypatch.setattr(codex_oauth, "_is_phone_code_page", lambda _driver: False)
+    monkeypatch.setattr(
+        codex_oauth,
+        "_email_otp_page_state",
+        lambda _driver: {"inputs": [], "errors": ["window.__oai_logHTML?window.__oai_logHTML():"], "text": ""},
+    )
+    monkeypatch.setattr(codex_oauth.time, "sleep", lambda _seconds: None)
+
+    assert codex_oauth._wait_after_email_otp_submit(Driver(), timeout=1) == "accepted"
 
 
 def test_otp_input_stage_surfaces_cloudflare_instead_of_timing_out(monkeypatch):

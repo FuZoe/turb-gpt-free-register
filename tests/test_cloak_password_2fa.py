@@ -10,6 +10,8 @@ from core.cloakbrowser_session import (
 )
 from core.cloakbrowser_driver import CloakElement
 from core.openai_auth import follow_password_registration, register_user
+from core import account_export
+from config import email as email_cfg
 from core.db import _account_credentials_line
 from webui.app import _account_secret_value
 from webui.config_editor import EDITABLE_FIELDS
@@ -239,6 +241,33 @@ def test_setup_cloak_2fa_starts_reauth_directly_and_syncs_cookies():
     assert secret == "TOTPSECRET"
     setup.assert_called_once_with(session, "user@example.test")
     sync.assert_called_once_with(driver, session)
+
+
+def test_setup_2fa_restarts_reauth_when_mailbox_stays_on_old_code(monkeypatch):
+    session = MagicMock()
+    starts = iter(("https://auth.openai.com/email-verification", "https://auth.openai.com/email-verification"))
+    otp_calls = []
+
+    monkeypatch.setattr(account_export, "_trigger_reauth", lambda _session, _email: next(starts))
+    monkeypatch.setattr(account_export, "_follow_reauth", lambda _session, _url: None)
+    monkeypatch.setattr(account_export, "human_delay", lambda _stage: None)
+    monkeypatch.setattr(email_cfg, "USE_EMAIL_SERVICE", True)
+
+    def fake_wait(_email, **kwargs):
+        otp_calls.append(kwargs)
+        if len(otp_calls) == 1:
+            raise RuntimeError("old OTP only")
+        return "123456"
+
+    monkeypatch.setattr("core.email_provider.wait_for_otp", fake_wait)
+    monkeypatch.setattr(account_export, "_validate_reauth_otp", lambda _session, _code: "continue-url")
+    monkeypatch.setattr(account_export, "_exchange_new_token", lambda _session, _url: "new-token")
+    monkeypatch.setattr(account_export, "_enroll_totp", lambda _session, _token: ("SECRET", "session"))
+    monkeypatch.setattr(account_export, "_activate_totp", lambda *_args: True)
+
+    assert account_export.setup_2fa(session, "user@example.test") == "SECRET"
+    assert len(otp_calls) == 2
+    assert otp_calls[0]["max_wait"] == 60
 
 
 def test_cloak_password_fields_are_exposed_in_webui():

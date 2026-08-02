@@ -19,9 +19,12 @@ from core.roxy_registration import (
     _clear_otp_inputs,
     _click_continue,
     _click_passwordless_signup_if_present,
+    _click_resend_email_otp,
     _fetch_chatgpt_session,
     _is_email_verification_page,
     _maybe_accept,
+    _password_page_state,
+    _raise_if_cloudflare_challenge,
     _submit_email_and_wait_next,
     _type_otp,
     is_cloudflare_challenge_error,
@@ -29,6 +32,8 @@ from core.roxy_registration import (
 from core.tenant_context import current_tenant, tenant_scope
 
 logger = logging.getLogger(__name__)
+
+_MAX_PROXY_ATTEMPTS = 10
 
 
 def _fill_existing_login_password(driver: Any, password: str, timeout: int = 60) -> None:
@@ -73,6 +78,42 @@ def _wait_for_email_otp_page(driver: Any, timeout: int = 30) -> None:
     raise RuntimeError(f"点击一次性验证码登录后未进入邮箱验证码页: url={getattr(driver, 'current_url', '')}")
 
 
+def _click_passwordless_otp_with_wait(driver: Any, timeout: int = 20) -> dict:
+    """Wait for the passwordless-login action rendered by the auth client."""
+    end = time.time() + timeout
+    last = {"ok": False, "reason": "missing_passwordless_button"}
+    while time.time() < end:
+        _raise_if_cloudflare_challenge(driver)
+        last = _click_passwordless_signup_if_present(driver) or last
+        if last.get("ok"):
+            return last
+        time.sleep(0.5)
+    return {**last, "state": _password_page_state(driver)}
+
+
+def _wait_login_otp_with_resend(driver: Any, email: str, after_ts: float) -> str:
+    last_error: Exception | None = None
+    for round_no in range(1, 4):
+        try:
+            logger.info("[2FA补跑] 等待账号登录 OTP：%s（%d/3）", email, round_no)
+            return wait_for_otp(email, after_ts=after_ts, max_wait=75)
+        except Exception as exc:
+            last_error = exc
+            if round_no >= 3:
+                raise
+            logger.warning(
+                "[2FA补跑] 登录 OTP 未到，重新发送邮件（%d/3）：%s: %s",
+                round_no, type(exc).__name__, str(exc)[:240],
+            )
+            clicked = _click_resend_email_otp(driver)
+            if not clicked:
+                raise RuntimeError(f"登录 OTP 取码失败且未找到重发按钮: {exc}") from exc
+            after_ts = time.time() - 1.0
+            time.sleep(2.0)
+    assert last_error is not None
+    raise last_error
+
+
 def _login_existing_account(driver: Any, email: str, password: str | None) -> None:
     login_otp_after_ts = time.time()
     driver.get("https://chatgpt.com/auth/login")
@@ -91,21 +132,29 @@ def _login_existing_account(driver: Any, email: str, password: str | None) -> No
         return
     if state == "login_password":
         login_otp_after_ts = time.time()
-        clicked = _click_passwordless_signup_if_present(driver)
+        clicked = _click_passwordless_otp_with_wait(driver)
         if not clicked.get("ok"):
             raise RuntimeError(f"账号没有保存密码，且未找到一次性验证码登录入口: {clicked}")
         _wait_for_email_otp_page(driver)
     elif state != "otp":
         raise RuntimeError(f"已有账号登录进入未知状态: {state}")
 
-    logger.info("[2FA补跑] 等待账号登录 OTP：%s", email)
-    code = wait_for_otp(email, after_ts=login_otp_after_ts)
-    _clear_otp_inputs(driver)
-    _type_otp(driver, code)
-    _click_continue(driver)
-    outcome = _wait_after_email_otp_submit(driver, timeout=45)
-    if outcome != "accepted":
-        raise RuntimeError(f"账号登录 OTP 未通过: {outcome}")
+    for validation_attempt in range(1, 4):
+        code = _wait_login_otp_with_resend(driver, email, login_otp_after_ts)
+        _clear_otp_inputs(driver)
+        _type_otp(driver, code)
+        _click_continue(driver)
+        outcome = _wait_after_email_otp_submit(driver, timeout=45)
+        if outcome == "accepted":
+            return
+        if validation_attempt >= 3:
+            raise RuntimeError(f"账号登录 OTP 未通过: {outcome}")
+        logger.warning(
+            "[2FA补跑] 登录 OTP 已过期/不匹配，重发后只读取新邮件（%d/3）",
+            validation_attempt,
+        )
+        _click_resend_email_otp(driver)
+        login_otp_after_ts = time.time() - 1.0
 
 
 def _run_existing_account_twofa_impl(
@@ -113,54 +162,71 @@ def _run_existing_account_twofa_impl(
     password: str | None = None,
     proxy: str | None = None,
 ) -> dict:
-    driver = None
-    opened = None
-    try:
-        driver, opened = build_cloak_driver(proxy=proxy)
-        proxy_used = ((opened.raw or {}).get("proxy") if opened else None) or proxy or None
-        logger.info("[2FA补跑] 开始登录已有账号：%s proxy=%s", email, proxy_used or "无")
-        _login_existing_account(driver, email, password)
-        session_info = _fetch_chatgpt_session(driver, timeout=120)
-        user = session_info.get("user") if isinstance(session_info, dict) else {}
-        if isinstance(user, dict) and bool(user.get("mfa")):
-            raise RuntimeError("服务端已启用 2FA，但本地缺少原 TOTP Secret，不能重新生成")
+    requested_proxy = proxy
+    for attempt in range(1, _MAX_PROXY_ATTEMPTS + 1):
+        driver = None
+        opened = None
+        try:
+            driver, opened = build_cloak_driver(proxy=proxy)
+            proxy_used = ((opened.raw or {}).get("proxy") if opened else None) or proxy or None
+            logger.info(
+                "[2FA补跑] 开始登录已有账号：%s proxy=%s（%d/%d）",
+                email, proxy_used or "无", attempt, _MAX_PROXY_ATTEMPTS,
+            )
+            _login_existing_account(driver, email, password)
+            session_info = _fetch_chatgpt_session(driver, timeout=120)
+            user = session_info.get("user") if isinstance(session_info, dict) else {}
+            if isinstance(user, dict) and bool(user.get("mfa")):
+                raise RuntimeError("服务端已启用 2FA，但本地缺少原 TOTP Secret，不能重新生成")
 
-        logger.info("[2FA补跑] 登录完成，开始第二次邮箱重认证：%s", email)
-        secret = setup_cloak_2fa(driver, email, proxy_used)
-        logger.info("[2FA补跑] 创建成功：%s", email)
-        return {
-            "ok": True,
-            "status": "success",
-            "email": email,
-            "totp_secret": secret,
-            "proxy_used": proxy_used,
-            "message": "2FA 已创建并保存",
-        }
-    except Exception as exc:
-        proxy_used = ((opened.raw or {}).get("proxy") if opened else None) or proxy or None
-        if is_cloudflare_challenge_error(exc) or _is_proxy_navigation_failure(exc):
-            try:
-                from config.proxy import mark_proxy_temporarily_bad
+            logger.info("[2FA补跑] 登录完成，开始第二次邮箱重认证：%s", email)
+            secret = setup_cloak_2fa(driver, email, proxy_used)
+            logger.info("[2FA补跑] 创建成功：%s", email)
+            return {
+                "ok": True,
+                "status": "success",
+                "email": email,
+                "totp_secret": secret,
+                "proxy_used": proxy_used,
+                "message": "2FA 已创建并保存",
+            }
+        except Exception as exc:
+            proxy_used = ((opened.raw or {}).get("proxy") if opened else None) or proxy or None
+            retryable = is_cloudflare_challenge_error(exc) or _is_proxy_navigation_failure(exc)
+            if retryable:
+                try:
+                    from config.proxy import mark_proxy_temporarily_bad
 
-                mark_proxy_temporarily_bad(proxy_used, ttl_seconds=900)
-            except Exception:
-                logger.debug("[2FA补跑] 标记代理冷却失败", exc_info=True)
-        logger.error("[2FA补跑] 失败：%s: %s", type(exc).__name__, exc)
-        _capture_cloak_failure_diagnostics(driver)
-        return {
-            "ok": False,
-            "status": "failed",
-            "email": email,
-            "proxy_used": proxy_used,
-            "error": f"{type(exc).__name__}: {str(exc)[:500]}",
-            "message": "创建 2FA 失败",
-        }
-    finally:
-        if driver and not bool(_cfg.CLOAK_KEEP_BROWSER_OPEN):
-            try:
-                driver.quit()
-            except Exception:
-                pass
+                    mark_proxy_temporarily_bad(proxy_used, ttl_seconds=900)
+                except Exception:
+                    logger.debug("[2FA补跑] 标记代理冷却失败", exc_info=True)
+            if retryable and attempt < _MAX_PROXY_ATTEMPTS and requested_proxy is None:
+                logger.warning(
+                    "[2FA补跑] 代理 %s 失败，换线重试（%d/%d）：%s: %s",
+                    proxy_used or "无", attempt, _MAX_PROXY_ATTEMPTS,
+                    type(exc).__name__, str(exc)[:240],
+                )
+            else:
+                logger.error("[2FA补跑] 失败：%s: %s", type(exc).__name__, exc)
+                _capture_cloak_failure_diagnostics(driver)
+                return {
+                    "ok": False,
+                    "status": "failed",
+                    "email": email,
+                    "proxy_used": proxy_used,
+                    "error": f"{type(exc).__name__}: {str(exc)[:500]}",
+                    "message": "创建 2FA 失败",
+                }
+        finally:
+            if driver and not bool(_cfg.CLOAK_KEEP_BROWSER_OPEN):
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
+        proxy = None
+        time.sleep(1.5)
+
+    raise AssertionError("unreachable")
 
 
 def run_existing_account_twofa(

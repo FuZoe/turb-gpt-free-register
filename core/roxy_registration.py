@@ -170,7 +170,7 @@ def _is_cloudflare_challenge_state(state: dict | None) -> bool:
         or 'ray id:' in text
         or ('cloudflare' in text and any(x in text for x in ('security', 'verify', 'challenge', '検証', '验证')))
         or any(x in text for x in (
-            'security verification', 'performing security verification',
+            'security verification', 'performing security verification', 'just a moment',
             'セキュリティ検証', 'しばらくお待ちください',
             '安全验证', '安全性验证', '正在验证',
         ))
@@ -489,6 +489,44 @@ def _email_submit_terminal_state(driver) -> str | None:
     return None
 
 
+def _handle_auth_challenge_if_present(driver) -> dict:
+    """Move passkey/auth-choice interstitials toward the email OTP route."""
+    try:
+        url = str(driver.current_url or '').lower()
+    except Exception:
+        url = ''
+    if '/auth_challenge' not in url:
+        return {"handled": False, "reason": "not_auth_challenge"}
+    result = driver.execute_script(r"""
+    const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+      && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none'
+      && !el.disabled && String(el.getAttribute('aria-disabled') || '').toLowerCase() !== 'true';
+    const candidates = [...document.querySelectorAll('a,button,input[type="submit"],[role="button"],[role="link"]')].filter(visible);
+    const describe = el => [
+      el.textContent, el.getAttribute('aria-label'), el.getAttribute('title'), el.getAttribute('href'),
+      el.getAttribute('name'), el.getAttribute('value'), el.id, el.className
+    ].join(' ').replace(/\s+/g, ' ').trim();
+    const rows = candidates.map(el => ({el, raw: describe(el), text: describe(el).toLowerCase()}));
+    const another = rows.find(x =>
+      /try another way|another way|other (way|method)|別の方法|その他の方法|別の方法を試す|其他方式|换一种方式/.test(x.text)
+      || /\/auth_challenge\/?(?:$|[?#])/.test(String(x.el.getAttribute('href') || ''))
+    );
+    const emailOtp = rows.find(x =>
+      !/passkey|security key|password|google|apple/.test(x.text)
+      && /one[- ]?time|email.{0,20}(code|otp)|(?:code|otp).{0,20}email|メール.{0,12}(コード|認証)|電子メール|邮箱|郵箱|验证码|驗證碼/.test(x.text)
+    );
+    const target = emailOtp || another;
+    if (!target) return {handled:false, reason:'missing_auth_alternative', actions:rows.slice(0,12).map(x => x.raw.slice(0,180))};
+    target.el.scrollIntoView({block:'center'});
+    target.el.click();
+    return {handled:true, reason:emailOtp ? 'clicked_email_otp' : 'clicked_another_way', target:target.raw.slice(0,180)};
+    """) or {}
+    if result.get("handled"):
+        logger.info("%s 已处理登录挑战页：%s", _log_prefix(driver), result)
+        time.sleep(1.0)
+    return result
+
+
 def _wait_email_submit_next_state(driver, email: str, timeout: int = 18) -> str:
     """邮箱提交后等待进入 password / otp / logged_in；仍停留邮箱页则返回 email_page。
 
@@ -506,6 +544,7 @@ def _wait_email_submit_next_state(driver, email: str, timeout: int = 18) -> str:
     expected_email = str(email or "").strip().lower()
     while time.time() < end:
         _raise_if_cloudflare_challenge(driver)
+        _handle_auth_challenge_if_present(driver)
         terminal_state = _email_submit_terminal_state(driver)
         if terminal_state:
             return terminal_state
@@ -738,7 +777,12 @@ def _wait_after_email_otp_submit(driver, timeout: int = 10) -> str:
             return 'accepted'
         last = _email_otp_page_state(driver)
         invalid = any(str(i.get('ariaInvalid') or '').lower() == 'true' for i in (last.get('inputs') or []))
-        if invalid or (last.get('errors') or []):
+        body_text = str(last.get('text') or '').lower()
+        error_hit = any(x in body_text for x in (
+            'invalid code', 'incorrect code', 'wrong code', 'expired',
+            '验证码错误', '验证码无效', '验证码已过期', 'コードが正しく', '無効', '期限',
+        ))
+        if invalid or error_hit:
             return 'invalid'
     if _is_email_verification_page(driver):
         logger.warning("%s[OTP] 提交后仍停留验证码页，按验证码无效/过期处理 snapshot=%s", _log_prefix(driver), _email_otp_page_state(driver))
@@ -1097,9 +1141,16 @@ def _password_page_state(driver) -> dict:
         const forms = [...document.querySelectorAll('form')].map(f => ({action: f.getAttribute('action') || ''}));
         const buttons = [...document.querySelectorAll('button,input[type="submit"]')].map(el => ({
           type: el.getAttribute('type') || '', name: el.getAttribute('name') || '', id: el.id || '',
+          value: el.getAttribute('value') || el.value || '',
+          text: String(el.textContent || el.getAttribute('aria-label') || '').trim().slice(0, 160),
           disabled: !!el.disabled, visible: !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
         })).slice(0, 30);
-        return {url: location.href, inputs, forms, buttons};
+        const actions = [...document.querySelectorAll('a,[role="link"]')].map(el => ({
+          href: el.getAttribute('href') || '',
+          text: String(el.textContent || el.getAttribute('aria-label') || '').trim().slice(0, 160),
+          visible: !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+        })).slice(0, 30);
+        return {url: location.href, inputs, forms, buttons, actions};
         """) or {}
     except Exception as exc:
         return {"url": getattr(driver, "current_url", ""), "error": f"{type(exc).__name__}: {exc}"}
@@ -1169,6 +1220,7 @@ def _click_passwordless_signup_if_present(driver) -> dict:
           return (
             (name === 'intent' && value.includes('passwordless') && value.includes('send_otp')) ||
             (name === 'intent' && value.includes('passwordless') && value.includes('otp')) ||
+            (name === 'intent' && /(^|[-_])(email[-_]?)?(otp|one[-_]?time[-_]?code|email[-_]?code)([-_]|$)/.test(value)) ||
             (name === 'intent' && value === 'passwordless_signup_send_otp') ||
             (name === 'intent' && value === 'passwordless_login_send_otp') ||
             attrs.includes('passwordless_signup_send_otp') ||

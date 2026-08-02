@@ -92,6 +92,11 @@ def test_access_token_probe_skips_cross_origin_auth_page():
         "title": "Just a moment",
         "text": "Performing security verification",
     },
+    {
+        "url": "https://chatgpt.com/auth/login",
+        "title": "Just a moment...",
+        "text": "",
+    },
 ])
 def test_detects_cloudflare_challenge_in_localized_pages(state):
     assert reg._is_cloudflare_challenge_state(state) is True
@@ -115,3 +120,19 @@ def test_detects_hidden_cloudflare_403_from_auth_network_requests():
 
     with pytest.raises(reg.CloudflareChallengeError, match="阻断认证请求"):
         reg._raise_if_cloudflare_network_failure(Driver())
+
+
+def test_passkey_challenge_uses_another_auth_method(monkeypatch):
+    class Driver:
+        current_url = "https://auth.openai.com/auth_challenge/passkey"
+
+        @staticmethod
+        def execute_script(script):
+            assert "try another way" in script.lower()
+            return {"handled": True, "reason": "clicked_another_way"}
+
+    monkeypatch.setattr(reg.time, "sleep", lambda _seconds: None)
+    result = reg._handle_auth_challenge_if_present(Driver())
+
+    assert result["handled"] is True
+    assert result["reason"] == "clicked_another_way"

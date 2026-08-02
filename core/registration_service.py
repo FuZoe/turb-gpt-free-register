@@ -212,17 +212,21 @@ def _is_cloudflare_challenge_failure(error: object) -> bool:
 def _is_proxy_navigation_failure(error: object) -> bool:
     """Identify browser navigation failures that should rotate the current proxy."""
     text = str(error or "").lower()
-    if "page.goto" not in text:
-        return False
-    return any(marker in text for marker in (
-        "timeout 30000ms exceeded",
+    network_markers = (
         "err_connection_closed",
         "err_connection_reset",
         "err_connection_timed_out",
         "err_proxy_connection_failed",
         "err_socks_connection_failed",
         "ssl_error_syscall",
-    ))
+        "tls connect error",
+        "curl: (35)",
+        "curl: (52)",
+        "curl: (56)",
+    )
+    if any(marker in text for marker in network_markers):
+        return True
+    return "page.goto" in text and "timeout 30000ms exceeded" in text
 
 
 def _maybe_auto_retry_cloudflare(job_id: int, error: object) -> dict | None:
