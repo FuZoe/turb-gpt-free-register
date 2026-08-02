@@ -1693,7 +1693,7 @@ function _twofaTaskCell(r) {
   if (status === 'running') return `<span class="pill status-running" title="${esc(message || '正在创建 2FA')}">创建2FA中</span>`;
   const label = status === 'failed' ? '重试2FA' : '创建2FA';
   const failed = status === 'failed' ? `<span class="pill status-failed" title="${esc(error || message || '创建失败')}">2FA失败</span>` : '<span class="muted">2FA未启用</span>';
-  return `${failed}<button class="good" data-create-twofa="${esc(r.id)}" title="${esc(error ? '重新创建；上次失败：' + error : '登录该账号并自动收取两封邮箱 OTP，创建并保存 TOTP')}">${label}</button>`;
+  return `${failed}<button class="good" data-create-twofa="${esc(r.id)}" title="${esc(error ? '重新创建；上次失败：' + error : '登录该账号并自动收取两封邮箱 OTP，创建并保存 TOTP')}">${label}</button><button data-manual-twofa="${esc(r.id)}" title="手动填写 TOTP Base32 Secret 或 otpauth 链接">手动填写2FA</button>`;
 }
 function _fmtPlanTime(v, dateOnly = false) {
   if (!v) return '';
@@ -1993,6 +1993,12 @@ $('#accountsBody').addEventListener('click', async (e) => {
   const createTwofaBtn = e.target.closest('[data-create-twofa]');
   if (createTwofaBtn) {
     await createOneTwofa(Number(createTwofaBtn.dataset.createTwofa), createTwofaBtn);
+    return;
+  }
+
+  const manualTwofaBtn = e.target.closest('[data-manual-twofa]');
+  if (manualTwofaBtn) {
+    await setManualTwofa(Number(manualTwofaBtn.dataset.manualTwofa), manualTwofaBtn);
     return;
   }
 
@@ -2304,6 +2310,28 @@ async function createOneTwofa(id, btn) {
     await pollAccountPlanStatuses();
   } catch(err) {
     showToast('创建 2FA 失败: ' + err.message);
+    btn.disabled = false;
+    btn.textContent = old;
+  }
+}
+
+async function setManualTwofa(id, btn) {
+  const acc = ACCOUNTS.find(a => Number(a.id) === Number(id));
+  if (!acc) { showToast('账号不存在'); return; }
+  const value = prompt(`手动填写 2FA\n\n${acc.email || ('#' + id)}\n\n请输入 TOTP Base32 Secret 或 otpauth:// 链接`, '');
+  if (value === null) return;
+  if (!value.trim()) { showToast('2FA Secret 为空'); return; }
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '保存中…';
+  try {
+    const result = await api(`/api/accounts/${encodeURIComponent(id)}/twofa-secret`, {
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({secret:value.trim()}),
+    });
+    showToast(result.message || '2FA 已保存');
+    await loadAccounts();
+  } catch (err) {
+    showToast('手动填写 2FA 失败: ' + err.message);
     btn.disabled = false;
     btn.textContent = old;
   }

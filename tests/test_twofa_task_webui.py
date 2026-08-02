@@ -1,6 +1,6 @@
 from unittest.mock import patch
 
-from webui.app import create_app
+from webui.app import _normalize_totp_secret, create_app
 
 
 def _client():
@@ -38,3 +38,34 @@ def test_create_twofa_bulk_skips_enabled_accounts(get_account, enqueue):
     assert payload["started_count"] == 1
     assert payload["skipped_count"] == 1
     enqueue.assert_called_once_with(account_id=2, email="missing@example.test", trigger="manual_bulk")
+
+
+def test_normalize_totp_secret_accepts_base32_and_otpauth_uri():
+    assert _normalize_totp_secret("jbsw y3dp-ehpk3pxp") == "JBSWY3DPEHPK3PXP"
+    assert _normalize_totp_secret("otpauth://totp/Test?secret=JBSWY3DPEHPK3PXP&issuer=Test") == "JBSWY3DPEHPK3PXP"
+
+
+@patch("webui.app.db.update_account_twofa_task")
+@patch("webui.app.db.get_account")
+def test_manual_twofa_endpoint_validates_and_saves_secret(get_account, update_twofa):
+    get_account.return_value = {"id": 7, "email": "user@example.test", "totp_secret": "", "twofa_task_status": "failed"}
+    update_twofa.return_value = True
+
+    response = _client().post(
+        "/api/accounts/7/twofa-secret",
+        json={"secret": "jbsw y3dp ehpk3pxp"},
+    )
+
+    assert response.status_code == 200
+    result = update_twofa.call_args.args[1]
+    assert result["totp_secret"] == "JBSWY3DPEHPK3PXP"
+    assert result["status"] == "success"
+
+
+@patch("webui.app.db.get_account")
+def test_manual_twofa_endpoint_rejects_invalid_secret(get_account):
+    get_account.return_value = {"id": 7, "totp_secret": "", "twofa_task_status": "failed"}
+
+    response = _client().post("/api/accounts/7/twofa-secret", json={"secret": "not-a-secret"})
+
+    assert response.status_code == 400

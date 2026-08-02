@@ -10,11 +10,14 @@ Flask 本地控制台。
 所有接口返回 JSON；前端是单文件 templates/index.html（原生 JS + fetch）。
 默认绑定 127.0.0.1，仅本地访问。
 """
+import base64
+import binascii
 import logging
+import re
 import threading
 import time
 import uuid
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from flask import Flask, Response, jsonify, render_template, request
 
@@ -34,6 +37,25 @@ from webui import config_editor
 from webui.runtime_resources import read_runtime_resources
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_totp_secret(value: str) -> str:
+    raw = str(value or "").strip()
+    if raw.lower().startswith("otpauth://"):
+        parsed = urlparse(raw)
+        if parsed.scheme.lower() != "otpauth" or parsed.netloc.lower() != "totp":
+            raise ValueError("仅支持 otpauth://totp 链接")
+        raw = (parse_qs(parsed.query).get("secret") or [""])[0]
+    secret = re.sub(r"[\s-]+", "", raw).upper().rstrip("=")
+    if not 16 <= len(secret) <= 128 or not re.fullmatch(r"[A-Z2-7]+", secret):
+        raise ValueError("TOTP Secret 必须是 16-128 位 Base32 字符")
+    try:
+        decoded = base64.b32decode(secret + "=" * ((8 - len(secret) % 8) % 8), casefold=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("TOTP Secret 不是有效的 Base32") from exc
+    if len(decoded) < 10:
+        raise ValueError("TOTP Secret 长度过短")
+    return secret
 
 def _pool_source_arg(default: str = "outlook") -> str:
     src = (request.args.get("source") or "").strip()
@@ -600,6 +622,31 @@ def create_app(auth_code: str | None = None) -> Flask:
         if not queued.get("accepted"):
             return jsonify({"ok": False, **queued}), 503
         return jsonify({"ok": True, "started": True, **queued}), 202
+
+    @app.post("/api/accounts/<int:acc_id>/twofa-secret")
+    def api_account_set_twofa_secret(acc_id: int):
+        """Validate and save a manually supplied TOTP Base32 secret or otpauth URI."""
+        acc = db.get_account(acc_id)
+        if not acc:
+            return jsonify({"ok": False, "error": "账号不存在"}), 404
+        if str(acc.get("totp_secret") or "").strip():
+            return jsonify({"ok": False, "error": "该账号已经保存 2FA"}), 409
+        if str(acc.get("twofa_task_status") or "") in {"queued", "running"}:
+            return jsonify({"ok": False, "error": "该账号的自动 2FA 任务正在执行"}), 409
+        data = request.get_json(silent=True) or {}
+        try:
+            secret = _normalize_totp_secret(data.get("secret") or data.get("totp_secret") or "")
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        saved = db.update_account_twofa_task(acc_id, {
+            "ok": True,
+            "status": "success",
+            "totp_secret": secret,
+            "message": "2FA 已手动填写并保存",
+        })
+        if not saved:
+            return jsonify({"ok": False, "error": "保存 2FA 失败"}), 500
+        return jsonify({"ok": True, "message": "2FA 已保存"})
 
     @app.post("/api/accounts/create-2fa-bulk")
     def api_accounts_create_twofa_bulk():

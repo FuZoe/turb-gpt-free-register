@@ -36,6 +36,8 @@ def test_accounts_ui_exposes_queued_twofa_automation():
     assert '/api/accounts/create-2fa' in text
     assert '2FA排队' in text
     assert '创建2FA中' in text
+    assert 'data-manual-twofa=' in text
+    assert '手动填写2FA' in text
 
 
 def test_accounts_automation_panel_exposes_all_candidate_modes():
