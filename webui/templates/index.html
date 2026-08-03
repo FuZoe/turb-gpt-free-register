@@ -621,7 +621,7 @@
       </div>
       <div class="pager-bar" id="pager-accounts"></div>
       <div class="body hidden" id="retryLogPanel">
-        <h3>补跑日志：<span id="retryLogEmail" style="font-size:13px;font-weight:400;color:var(--muted);"></span>
+        <h3><span id="retryLogTitle">补跑日志</span>：<span id="retryLogEmail" style="font-size:13px;font-weight:400;color:var(--muted);"></span>
           <button class="btn" id="btnCloseRetryLog" style="float:right;min-height:28px;">关闭</button>
         </h3>
         <div class="log" id="retryLogContent">加载中…</div>
@@ -829,9 +829,9 @@
   </div>
   <div class="table-wrap">
     <table class="auto-task-table">
-      <colgroup><col class="col-check"><col class="col-id"><col><col class="col-status"></colgroup>
-      <thead><tr><th><input type="checkbox" id="autoTaskSelectAll" title="全选/取消全选全部候选账号"></th><th>ID</th><th>邮箱</th><th>状态</th></tr></thead>
-      <tbody id="autoTaskAccountsBody"><tr><td colspan="4" class="muted">加载中…</td></tr></tbody>
+      <colgroup><col class="col-check"><col class="col-id"><col><col class="col-status"><col class="col-status"></colgroup>
+      <thead><tr><th><input type="checkbox" id="autoTaskSelectAll" title="全选/取消全选全部候选账号"></th><th>ID</th><th>邮箱</th><th>状态</th><th>日志</th></tr></thead>
+      <tbody id="autoTaskAccountsBody"><tr><td colspan="5" class="muted">加载中…</td></tr></tbody>
     </table>
   </div>
   <div class="auto-task-pager">
@@ -1173,6 +1173,8 @@ function closeLogModal() {
 }
 function closeRetryLogModal() {
   retryLogEmail = null;
+  retryLogType = 'codex';
+  retryLogAccountId = null;
   clearInterval(retryLogTimer);
   $('#retryLogPanel').classList.add('hidden');
   updateModalScrollLock();
@@ -1321,6 +1323,15 @@ function autoTaskRowStatus(row) {
   const labels = {queued:'排队中',running:'执行中',retrying:'执行中',failed:'上次失败',stopped:'已停止',skipped:'已跳过'};
   return labels[status] || status;
 }
+function autoTaskRowLogButton(row) {
+  if (AUTO_TASK_MODE === 'codex') {
+    return `<button data-task-log="codex" data-task-account-id="${esc(row.id)}" data-task-email="${esc(row.email || '')}">Codex日志</button>`;
+  }
+  const status = AUTO_TASK_MODE === 'password' ? row.password_task_status : row.twofa_task_status;
+  if (!status) return '<span class="muted">-</span>';
+  const label = AUTO_TASK_MODE === 'password' ? '密码日志' : '2FA日志';
+  return `<button data-task-log="${esc(AUTO_TASK_MODE)}" data-task-account-id="${esc(row.id)}" data-task-email="${esc(row.email || '')}">${label}</button>`;
+}
 function renderAutoTaskAccounts() {
   const totalPages = Math.max(1, Math.ceil(AUTO_TASK_TOTAL / AUTO_TASK_PAGE_SIZE));
   $('#autoTaskAccountsBody').innerHTML = AUTO_TASK_ACCOUNTS.map(row => {
@@ -1331,8 +1342,9 @@ function renderAutoTaskAccounts() {
       <td class="muted">#${esc(row.id)}</td>
       <td>${esc(row.email || '')}</td>
       <td>${busy ? '<span class="pill status-running">' : '<span class="muted">'}${esc(autoTaskRowStatus(row))}</span></td>
+      <td>${autoTaskRowLogButton(row)}</td>
     </tr>`;
-  }).join('') || '<tr><td colspan="4" class="muted">没有符合条件的账号</td></tr>';
+  }).join('') || '<tr><td colspan="5" class="muted">没有符合条件的账号</td></tr>';
   $('#autoTaskSelectedHint').textContent = `已选 ${AUTO_TASK_SELECTED.size} · 候选 ${AUTO_TASK_TOTAL}`;
   $('#btnSubmitAutoTask').disabled = AUTO_TASK_SELECTED.size === 0;
   $('#btnSubmitAutoTask').textContent = `${autoTaskConfig().label} (${AUTO_TASK_SELECTED.size})`;
@@ -1435,6 +1447,11 @@ async function submitAutoTasks() {
     const started = Number(result.started_count || (result.started || []).length || 0);
     const skipped = Number(result.skipped_count || (result.skipped || []).length || 0);
     showToast(skipped ? `已入队 ${started} 个，跳过 ${skipped} 个` : `已入队 ${started} 个任务`);
+    const first = (result.started || [])[0];
+    if (first && first.email) {
+      closeAutoTaskPanel();
+      openRetryLog(first.email, AUTO_TASK_MODE, first.id);
+    }
     AUTO_TASK_SELECTED.clear();
     autoTaskSelectAll = false;
     await loadAutoTaskAccounts();
@@ -1449,6 +1466,12 @@ async function submitAutoTasks() {
 $('#btnOpenAutoTask').addEventListener('click', openAutoTaskPanel);
 $('#btnCloseAutoTask').addEventListener('click', closeAutoTaskPanel);
 $('#btnSubmitAutoTask').addEventListener('click', submitAutoTasks);
+$('#autoTaskAccountsBody').addEventListener('click', (event) => {
+  const btn = event.target.closest('[data-task-log]');
+  if (!btn) return;
+  closeAutoTaskPanel();
+  openRetryLog(btn.dataset.taskEmail, btn.dataset.taskLog, Number(btn.dataset.taskAccountId));
+});
 $('#qAutoTaskAccounts').addEventListener('input', debounce(() => {
   AUTO_TASK_SELECTED.clear(); autoTaskSelectAll = false; AUTO_TASK_PAGE = 1; loadAutoTaskAccounts();
 }, 250));
@@ -1774,15 +1797,20 @@ function _codexAgentCell(r) {
   return gen ? `<div class="agent-token-cell">${gen}</div>` : '<span class="muted">-</span>';
 }
 function _twofaTaskCell(r) {
-  if (r.totp_enabled) return '<span class="pill status-success">2FA已启用</span>';
+  const log = r.twofa_task_status ? `<button data-task-log="twofa" data-task-account-id="${esc(r.id)}" data-task-email="${esc(r.email)}">2FA日志</button>` : '';
+  if (r.totp_enabled) return `<span class="pill status-success">2FA已启用</span>${log}`;
   const status = r.twofa_task_status || '';
   const message = r.twofa_task_message || '';
   const error = r.twofa_task_error || '';
-  if (status === 'queued') return `<span class="pill status-running" title="${esc(message || '任务正在排队')}">2FA排队</span>`;
-  if (status === 'running') return `<span class="pill status-running" title="${esc(message || '正在创建 2FA')}">创建2FA中</span>`;
+  if (status === 'queued') return `<span class="pill status-running" title="${esc(message || '任务正在排队')}">2FA排队</span>${log}`;
+  if (status === 'running') return `<span class="pill status-running" title="${esc(message || '正在创建 2FA')}">创建2FA中</span>${log}`;
   const label = status === 'failed' ? '重试2FA' : '创建2FA';
   const failed = status === 'failed' ? `<span class="pill status-failed" title="${esc(error || message || '创建失败')}">2FA失败</span>` : '<span class="muted">2FA未启用</span>';
-  return `${failed}<button class="good" data-create-twofa="${esc(r.id)}" title="${esc(error ? '重新创建；上次失败：' + error : '登录该账号并自动收取两封邮箱 OTP，创建并保存 TOTP')}">${label}</button><button data-manual-twofa="${esc(r.id)}" title="手动填写 TOTP Base32 Secret 或 otpauth 链接">手动填写2FA</button>`;
+  return `${failed}<button class="good" data-create-twofa="${esc(r.id)}" title="${esc(error ? '重新创建；上次失败：' + error : '登录该账号并自动收取两封邮箱 OTP，创建并保存 TOTP')}">${label}</button><button data-manual-twofa="${esc(r.id)}" title="手动填写 TOTP Base32 Secret 或 otpauth 链接">手动填写2FA</button>${log}`;
+}
+function _passwordTaskLogButton(r) {
+  if (!r.password_task_status) return '';
+  return `<button data-task-log="password" data-task-account-id="${esc(r.id)}" data-task-email="${esc(r.email)}">密码日志</button>`;
 }
 function _fmtPlanTime(v, dateOnly = false) {
   if (!v) return '';
@@ -1944,7 +1972,7 @@ function renderAccounts() {
       <td><div class="main-cell">${esc(r.email)}${r.archived ? ' <span class="pill status-used" title="该账号已归档">归档</span>' : ''}</div><div class="sub-cell">${esc(r.user_name || '-')}</div></td>
       <td>${_planCell(r)}<div class="sub-cell">${_extractLinkCell(r)}</div></td>
       <td class="wrap" title="${esc(r.note || '')}">${r.note ? esc(short(r.note, 40)) : '<span class="muted">-</span>'}</td>
-      <td><div class="account-secret-cell">${r.has_registration_password ? `<button data-account-show-password="${esc(r.id)}" data-account-email="${esc(r.email)}">查看密码</button>` : '<span class="muted">无密码</span>'}<span class="account-twofa-task">${_twofaTaskCell(r)}</span></div></td>
+      <td><div class="account-secret-cell">${r.has_registration_password ? `<button data-account-show-password="${esc(r.id)}" data-account-email="${esc(r.email)}">查看密码</button>` : '<span class="muted">无密码</span>'}${_passwordTaskLogButton(r)}<span class="account-twofa-task">${_twofaTaskCell(r)}</span></div></td>
       <td>${_codexCell(r)}</td>
       <td class="actions actions-cell">
         <div class="account-row-actions">
@@ -2009,10 +2037,14 @@ function updateAccountSelectionUi(pageRows = null) {
 }
 
 // ---------- 补跑日志面板 ----------
-let retryLogEmail = null, retryLogTimer = null;
+let retryLogEmail = null, retryLogType = 'codex', retryLogAccountId = null, retryLogTimer = null;
 
-function openRetryLog(email) {
+function openRetryLog(email, type = 'codex', accountId = null) {
   retryLogEmail = email;
+  retryLogType = type || 'codex';
+  retryLogAccountId = accountId;
+  const labels = {codex:'Codex补跑日志', password:'创建密码日志', twofa:'创建2FA日志'};
+  $('#retryLogTitle').textContent = labels[retryLogType] || '任务日志';
   $('#retryLogEmail').textContent = email;
   $('#retryLogPanel').classList.remove('hidden');
   updateModalScrollLock();
@@ -2024,7 +2056,10 @@ function openRetryLog(email) {
 async function pollRetryLog() {
   if (!retryLogEmail) return;
   try {
-    const r = await api(`/api/codex/retry-log?email=${encodeURIComponent(retryLogEmail)}`);
+    const url = retryLogType === 'codex'
+      ? `/api/codex/retry-log?email=${encodeURIComponent(retryLogEmail)}`
+      : `/api/accounts/task-log?account_id=${encodeURIComponent(retryLogAccountId)}&type=${encodeURIComponent(retryLogType)}`;
+    const r = await api(url);
     const c = $('#retryLogContent');
     const atBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 30;
     c.textContent = r.log || '(暂无日志，等待任务写入…)';
@@ -2144,6 +2179,12 @@ $('#accountsBody').addEventListener('click', async (e) => {
   const logBtn = e.target.closest('[data-codex-log]');
   if (logBtn) {
     openRetryLog(logBtn.dataset.codexLog);
+    return;
+  }
+
+  const taskLogBtn = e.target.closest('[data-task-log]');
+  if (taskLogBtn) {
+    openRetryLog(taskLogBtn.dataset.taskEmail, taskLogBtn.dataset.taskLog, Number(taskLogBtn.dataset.taskAccountId));
     return;
   }
 
@@ -2396,6 +2437,7 @@ async function createOneTwofa(id, btn) {
       body: JSON.stringify({account_id: id}),
     });
     showToast('创建 2FA 任务已入队');
+    openRetryLog(acc.email, 'twofa', id);
     await pollAccountPlanStatuses();
   } catch(err) {
     showToast('创建 2FA 失败: ' + err.message);

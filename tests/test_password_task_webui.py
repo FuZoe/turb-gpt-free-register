@@ -37,3 +37,21 @@ def test_create_password_bulk_skips_accounts_with_password(get_account, enqueue)
     assert payload["started_count"] == 1
     assert payload["skipped_count"] == 1
     enqueue.assert_called_once_with(account_id=2, email="missing@example.test", trigger="manual_bulk")
+
+
+@patch("webui.app.account_task_log.read")
+@patch("webui.app.db.get_account")
+def test_password_task_log_endpoint_returns_persisted_log(get_account, read_log):
+    get_account.return_value = {
+        "id": 7,
+        "email": "user@example.test",
+        "password_task_status": "running",
+    }
+    read_log.return_value = "password stage log"
+
+    response = _client().get("/api/accounts/task-log?account_id=7&type=password")
+
+    assert response.status_code == 200
+    assert response.get_json()["log"] == "password stage log"
+    assert response.get_json()["running"] is True
+    read_log.assert_called_once_with("password", "user@example.test")

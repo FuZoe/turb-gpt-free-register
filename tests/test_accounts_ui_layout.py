@@ -52,6 +52,9 @@ def test_accounts_automation_panel_exposes_all_candidate_modes():
     assert '/api/accounts/create-password-bulk' in text
     assert '/api/codex/retry-bulk' in text
     assert 'fetchAllAutoTaskCandidateIds' in text
+    assert '密码日志' in text
+    assert '2FA日志' in text
+    assert '/api/accounts/task-log?account_id=' in text
 
 
 def test_accounts_ui_exposes_twofa_and_password_filters():

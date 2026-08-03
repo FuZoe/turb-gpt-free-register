@@ -22,6 +22,7 @@ from urllib.parse import parse_qs, urlparse
 from flask import Flask, Response, jsonify, render_template, request
 
 from core import (
+    account_task_log,
     codex_agent_service,
     codex_retry_service,
     db,
@@ -2200,6 +2201,32 @@ def create_app(auth_code: str | None = None) -> Flask:
             "ok": True,
             "log": content,
             "running": codex_retry_service.is_retrying(email),
+        })
+
+    @app.get("/api/accounts/task-log")
+    def api_account_task_log():
+        """Read the latest password/2FA background-task log for one account."""
+        task_type = (request.args.get("type") or "").strip().lower()
+        if task_type not in {"password", "twofa"}:
+            return jsonify({"ok": False, "error": "type 仅支持 password/twofa"}), 400
+        try:
+            account_id = int(request.args.get("account_id") or "")
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "account_id 无效"}), 400
+        account = db.get_account(account_id)
+        if not account:
+            return jsonify({"ok": False, "error": "账号不存在"}), 404
+        email = str(account.get("email") or "").strip()
+        status_key = "password_task_status" if task_type == "password" else "twofa_task_status"
+        status = str(account.get(status_key) or "")
+        return jsonify({
+            "ok": True,
+            "account_id": account_id,
+            "email": email,
+            "type": task_type,
+            "status": status,
+            "running": status in {"queued", "running"},
+            "log": account_task_log.read(task_type, email),
         })
 
     # ----------------------------------------------------------
