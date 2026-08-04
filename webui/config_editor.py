@@ -485,12 +485,12 @@ EDITABLE_FIELDS = [
         "label": "内置UPI服务地址", "help": "注册机内置UPI提链服务地址，默认 https://upi.newzoe.cloud",
     },
     {
-        "key": "EXTRACT_LINK_EXTERNAL_NL_API_BASE", "file": "extract_link.py", "type": "str", "group": "提链",
-        "label": "外部荷兰服务地址", "help": "外部UPI服务地址，默认 https://ideal.169abc.xyz/upi；CDK由用户提交任务时填写",
+        "key": "EXTRACT_LINK_EXTERNAL_IDEAL_API_BASE", "file": "extract_link.py", "type": "str", "group": "提链",
+        "label": "外部荷兰iDEAL地址", "help": "外部iDEAL服务地址，默认 https://ideal.169abc.xyz；CDK由用户提交任务时填写",
     },
     {
         "key": "EXTRACT_LINK_CDK", "file": "extract_link.py", "type": "str", "group": "提链",
-        "label": "内置UPI CDK", "help": "仅供内置UPI渠道使用；外部荷兰CDK由用户每次提交任务时填写",
+        "label": "内置UPI CDK", "help": "仅供内置UPI渠道使用；外部荷兰iDEAL CDK由用户每次提交任务时填写",
         "storage": "env", "secret": True,
     },
     {

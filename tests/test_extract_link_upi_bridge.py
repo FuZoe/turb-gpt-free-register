@@ -113,7 +113,7 @@ def test_query_cdk_uses_newzoe_status_endpoint(monkeypatch):
     assert session.call[1]["json"] == {"cdk": "CDK_VALUE", "cdk_type": "normal"}
 
 
-def test_external_nl_bridge_submits_at_and_polls_ready_task(monkeypatch):
+def test_external_ideal_bridge_uses_generate_ideal_and_cursor_polling(monkeypatch):
     class ExternalResponse:
         text = ""
         headers = {}
@@ -135,24 +135,41 @@ def test_external_nl_bridge_submits_at_and_polls_ready_task(monkeypatch):
             self.calls.append(("POST", url, kwargs))
             return ExternalResponse(202, {
                 "ok": True,
-                "accepted": True,
-                "task_id": "upi-task-1",
-                "status": "queued",
+                "created": True,
+                "task_id": "ideal-task-1",
+                "task_token": "ideal-task-1.signature",
+                "task": {"payment_method": "ideal", "state": "queued", "total": 1},
             })
 
         def get(self, url, **kwargs):
             self.calls.append(("GET", url, kwargs))
             self.polls += 1
             if self.polls == 1:
-                return ExternalResponse(200, {"ok": True, "task_id": "upi-task-1", "status": "running"})
+                return ExternalResponse(200, {
+                    "ok": True,
+                    "task": {"state": "running", "payment_method": "ideal"},
+                    "events": [{"id": 1, "message": "正在生成 iDEAL 链接"}],
+                    "cursor": 1,
+                    "result_cursor": 0,
+                    "events_has_more": False,
+                    "results_has_more": False,
+                    "results": [],
+                })
             return ExternalResponse(200, {
                 "ok": True,
-                "task_id": "upi-task-1",
-                "status": "ready",
-                "pay_url": "https://payments.stripe.com/upi/instructions/external",
-                "qr_data_url": "data:image/png;base64,AAAA",
-                "expires_at": 1783900300,
-                "cdk": {"available": 9},
+                "task": {"state": "success", "payment_method": "ideal"},
+                "events": [],
+                "cursor": 1,
+                "result_cursor": 9,
+                "events_has_more": False,
+                "results_has_more": False,
+                "results": [{
+                    "id": 9,
+                    "item_index": 1,
+                    "account_email": "user@example.test",
+                    "long_url": "https://checkout.stripe.com/ideal/external",
+                    "payment_method": "ideal",
+                }],
             })
 
         def close(self):
@@ -160,31 +177,37 @@ def test_external_nl_bridge_submits_at_and_polls_ready_task(monkeypatch):
 
     session = ExternalSession()
     monkeypatch.setattr(service, "_session", lambda: session)
-    monkeypatch.setattr(service, "_external_nl_api_base", lambda: "https://ideal.169abc.xyz/upi")
+    monkeypatch.setattr(service, "_external_ideal_api_base", lambda: "https://ideal.169abc.xyz")
     monkeypatch.setattr(service.time, "sleep", lambda _seconds: None)
 
-    events = list(service._iter_external_nl_events(token="AT_VALUE", cdk="USER_CDK", job_id="local-job"))
+    events = list(service._iter_external_ideal_events(token="AT_VALUE", cdk="USER_CDK", job_id="local-job"))
 
-    assert session.calls[0][0:2] == ("POST", "https://ideal.169abc.xyz/upi/api/pay")
-    assert session.calls[0][2]["json"] == {"cdk": "USER_CDK", "at": "AT_VALUE"}
-    assert session.calls[-1][0:2] == ("GET", "https://ideal.169abc.xyz/upi/api/status/upi-task-1")
+    assert session.calls[0][0:2] == ("POST", "https://ideal.169abc.xyz/api/generate-ideal")
+    payload = session.calls[0][2]["json"]
+    assert payload["cdk"] == "USER_CDK"
+    assert json.loads(payload["session_json"]) == {"access_token": "AT_VALUE"}
+    assert payload["provider"] == "local"
+    assert payload["mode"] == "recovery"
+    assert "payment_cdk" not in payload and "direct_submit_provider" not in payload
+    assert session.calls[-1][0] == "GET"
+    assert session.calls[-1][1].startswith("https://ideal.169abc.xyz/api/tasks/ideal-task-1?")
+    assert session.calls[-1][2]["headers"]["X-Task-Token"] == "ideal-task-1.signature"
     result = events[-1][1]["result"]
     assert result["long_url"].endswith("/external")
-    assert result["image_url_png"].startswith("data:image/png")
-    assert result["payment_link_type"] == "upi_external_nl"
-    assert result["cdk_remaining"] == 9
-    assert result["expires_at"].startswith("2026-")
+    assert result["payment_method"] == "ideal"
+    assert result["payment_link_type"] == "ideal_external"
+    assert result["provider_task_id"] == "ideal-task-1"
     assert session.closed is True
 
 
-def test_external_nl_cdk_must_be_supplied_by_user(monkeypatch):
+def test_external_ideal_cdk_must_be_supplied_by_user(monkeypatch):
     monkeypatch.setenv("EXTRACT_LINK_CDK", "INTERNAL_CDK")
 
     with pytest.raises(ValueError, match="用户填写 CDK"):
-        service._cdk(None, provider="external_nl")
+        service._cdk(None, provider="external_ideal")
 
 
-def test_query_external_nl_cdk_uses_short_status_endpoint(monkeypatch):
+def test_query_external_ideal_cdk_uses_check_cdk_endpoint(monkeypatch):
     class JsonResponse:
         status_code = 200
         text = ""
@@ -206,10 +229,10 @@ def test_query_external_nl_cdk_uses_short_status_endpoint(monkeypatch):
 
     session = JsonSession()
     monkeypatch.setattr(service, "_session", lambda: session)
-    monkeypatch.setattr(service, "_external_nl_api_base", lambda: "https://ideal.169abc.xyz/upi")
+    monkeypatch.setattr(service, "_external_ideal_api_base", lambda: "https://ideal.169abc.xyz")
 
-    result = service.query_cdk(cdk="USER_CDK", provider="external_nl")
+    result = service.query_cdk(cdk="USER_CDK", provider="external_ideal")
 
     assert result["available"] == 6
-    assert session.call[0] == "https://ideal.169abc.xyz/upi/api/cdk-status"
+    assert session.call[0] == "https://ideal.169abc.xyz/api/check-cdk"
     assert session.call[1]["json"] == {"cdk": "USER_CDK"}

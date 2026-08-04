@@ -51,7 +51,7 @@ def _int_setting(name: str, default: int, lower: int, upper: int) -> int:
 
 
 SUPPORTED_LINK_TYPES = {"upi"}
-SUPPORTED_PROVIDERS = {"builtin", "external_nl"}
+SUPPORTED_PROVIDERS = {"builtin", "external_ideal"}
 
 
 def _link_type(value: str | None = None) -> str:
@@ -67,13 +67,13 @@ def _api_base() -> str:
     return base
 
 
-def _external_nl_api_base() -> str:
+def _external_ideal_api_base() -> str:
     base = str(_runtime_setting(
-        "EXTRACT_LINK_EXTERNAL_NL_API_BASE",
-        "https://ideal.169abc.xyz/upi",
+        "EXTRACT_LINK_EXTERNAL_IDEAL_API_BASE",
+        "https://ideal.169abc.xyz",
     ) or "").strip().rstrip("/")
     if not base:
-        raise ValueError("EXTRACT_LINK_EXTERNAL_NL_API_BASE 为空")
+        raise ValueError("EXTRACT_LINK_EXTERNAL_IDEAL_API_BASE 为空")
     return base
 
 
@@ -82,19 +82,21 @@ def _provider(value: str | None = None) -> str:
     aliases = {
         "internal": "builtin",
         "newzoe": "builtin",
-        "nl": "external_nl",
-        "netherlands": "external_nl",
-        "external": "external_nl",
+        "nl": "external_ideal",
+        "netherlands": "external_ideal",
+        "external": "external_ideal",
+        "external_nl": "external_ideal",
+        "ideal": "external_ideal",
     }
     provider = aliases.get(raw, raw)
     if provider not in SUPPORTED_PROVIDERS:
-        raise ValueError("provider 仅支持 builtin/external_nl")
+        raise ValueError("provider 仅支持 builtin/external_ideal")
     return provider
 
 
 def _cdk(value: str | None = None, *, provider: str = "builtin") -> str:
     provider = _provider(provider)
-    if provider == "external_nl":
+    if provider == "external_ideal":
         cdk = str(value or "").strip()
         if not cdk:
             raise ValueError("外部荷兰提链需要用户填写 CDK")
@@ -123,11 +125,11 @@ def _session():
 
 def query_cdk(*, cdk: str | None = None, provider: str | None = None) -> dict:
     provider = _provider(provider)
-    base = _external_nl_api_base() if provider == "external_nl" else _api_base()
+    base = _external_ideal_api_base() if provider == "external_ideal" else _api_base()
     code = _cdk(cdk, provider=provider)
     timeout = _int_setting("EXTRACT_LINK_REQUEST_TIMEOUT", 30, 5, 300)
-    body_data = {"cdk": code} if provider == "external_nl" else {"cdk": code, "cdk_type": "normal"}
-    endpoint = "/api/cdk-status" if provider == "external_nl" else "/api/cdk/status"
+    body_data = {"cdk": code} if provider == "external_ideal" else {"cdk": code, "cdk_type": "normal"}
+    endpoint = "/api/check-cdk" if provider == "external_ideal" else "/api/cdk/status"
     s = _session()
     try:
         if s is None:
@@ -185,55 +187,62 @@ def _external_expiry(value):
     return datetime.fromtimestamp(stamp / 1000, tz=timezone.utc).isoformat()
 
 
-def _normalize_external_nl_result(result: dict, base: str) -> dict:
+def _normalize_external_ideal_result(result: dict, base: str, task_id: str = "") -> dict:
     value = dict(result or {})
-    pay_url = str(value.get("pay_url") or value.get("stripe_hosted_url") or "").strip()
+    pay_url = str(
+        value.get("long_url")
+        or value.get("pay_url")
+        or value.get("stripe_hosted_url")
+        or ""
+    ).strip()
     qr_url = str(value.get("qr_url") or "").strip()
     if qr_url.startswith("/"):
         qr_url = base.rstrip("/") + qr_url
     qr_data_url = str(value.get("qr_data_url") or "").strip()
-    cdk_data = value.get("cdk") if isinstance(value.get("cdk"), dict) else {}
-    remaining = (
-        cdk_data.get("available")
-        if cdk_data.get("available") is not None
-        else cdk_data.get("remaining")
-    )
     value.update({
         "long_url": pay_url,
         "copy_paste": pay_url,
         "image_url_png": qr_data_url or qr_url,
         "image_url_svg": "",
-        "payment_method": "upi",
-        "payment_link_type": "upi_external_nl",
+        "payment_method": "ideal",
+        "payment_link_type": "ideal_external",
         "expires_at": _external_expiry(value.get("expires_at")),
-        "cdk_remaining": remaining,
-        "provider_task_id": value.get("task_id"),
+        "provider_task_id": value.get("task_id") or task_id,
     })
     return value
 
 
-def _external_nl_has_artifact(result: dict) -> bool:
+def _external_ideal_has_artifact(result: dict) -> bool:
     return any(str(result.get(key) or "").strip() for key in (
-        "pay_url", "stripe_hosted_url", "qr_url", "qr_data_url",
+        "long_url", "pay_url", "stripe_hosted_url", "qr_url", "qr_data_url",
     ))
 
 
-def _iter_external_nl_events(*, token: str, cdk: str, job_id: str):
-    """Submit one AT to ideal.169abc.xyz and poll its asynchronous task."""
-    base = _external_nl_api_base()
+def _iter_external_ideal_events(*, token: str, cdk: str, job_id: str):
+    """Create one external iDEAL task and consume its cursor-based result API."""
+    base = _external_ideal_api_base()
     request_timeout = _int_setting("EXTRACT_LINK_REQUEST_TIMEOUT", 30, 5, 300)
     event_timeout = _int_setting("EXTRACT_LINK_EVENT_TIMEOUT", 600, 30, 900)
-    code = _cdk(cdk, provider="external_nl")
-    payload = {"cdk": code, "at": token}
+    code = _cdk(cdk, provider="external_ideal")
+    payload = {
+        "cdk": code,
+        "session_json": json.dumps({"access_token": token}, ensure_ascii=False),
+        "provider": "local",
+        "mode": "recovery",
+        "client_request_id": job_id,
+    }
     s = _session()
 
-    def request_json(method: str, url: str, *, body: dict | None = None):
+    def request_json(method: str, url: str, *, body: dict | None = None, headers: dict | None = None):
+        request_headers = {"Accept": "application/json", **(headers or {})}
         if s is None:
             raw_body = json.dumps(body).encode("utf-8") if body is not None else None
+            if body is not None:
+                request_headers["Content-Type"] = "application/json"
             req = Request(
                 url,
                 data=raw_body,
-                headers={"Accept": "application/json", "Content-Type": "application/json"},
+                headers=request_headers,
                 method=method,
             )
             try:
@@ -246,7 +255,10 @@ def _iter_external_nl_events(*, token: str, cdk: str, job_id: str):
                 except Exception:
                     data = {"error": raw[:300]}
                 return int(exc.code), data, dict(exc.headers)
-        response = s.post(url, json=body, timeout=request_timeout) if method == "POST" else s.get(url, timeout=request_timeout)
+        if method == "POST":
+            response = s.post(url, json=body, headers=request_headers, timeout=request_timeout)
+        else:
+            response = s.get(url, headers=request_headers, timeout=request_timeout)
         try:
             data = response.json()
         except Exception:
@@ -254,26 +266,26 @@ def _iter_external_nl_events(*, token: str, cdk: str, job_id: str):
         return int(response.status_code), data, dict(getattr(response, "headers", {}) or {})
 
     try:
-        status_code, created, headers = request_json("POST", f"{base}/api/pay", body=payload)
+        status_code, created, headers = request_json("POST", f"{base}/api/generate-ideal", body=payload)
         if status_code not in {200, 202} or not isinstance(created, dict) or not created.get("ok"):
-            raise RuntimeError(_extract_error_message(created) or f"外部荷兰提链接口 HTTP {status_code}")
-        if _external_nl_has_artifact(created):
-            yield "result", {"result": _normalize_external_nl_result(created, base)}
-            return
+            raise RuntimeError(_extract_error_message(created) or f"外部荷兰 iDEAL 接口 HTTP {status_code}")
         task_id = str(created.get("task_id") or "").strip()
-        if not task_id:
-            tasks = created.get("tasks") if isinstance(created.get("tasks"), list) else []
-            task_id = str((tasks[0] if tasks else {}).get("task_id") or "").strip()
-        if not task_id:
-            raise RuntimeError("外部荷兰提链已接受但未返回 task_id")
-        yield "log", {"message": f"外部荷兰任务已接受，状态={created.get('status') or 'queued'}"}
+        task_token = str(created.get("task_token") or "").strip()
+        if not task_id or not task_token:
+            raise RuntimeError("外部荷兰 iDEAL 已接受但未返回 task_id/task_token")
+        task = created.get("task") if isinstance(created.get("task"), dict) else {}
+        yield "log", {"message": f"外部荷兰 iDEAL 任务已接受，状态={task.get('state') or 'queued'}"}
         deadline = time.monotonic() + event_timeout
-        last_status = ""
+        last_state = ""
+        cursor = 0
+        result_cursor = 0
+        task_headers = {"X-Task-Token": task_token}
         while time.monotonic() < deadline:
-            time.sleep(3)
+            time.sleep(2)
             status_code, current, headers = request_json(
                 "GET",
-                f"{base}/api/status/{quote(task_id, safe='')}",
+                f"{base}/api/tasks/{quote(task_id, safe='')}?cursor={cursor}&result_cursor={result_cursor}",
+                headers=task_headers,
             )
             current_data = current if isinstance(current, dict) else {}
             current_error = _extract_error_message(current_data).lower()
@@ -282,20 +294,41 @@ def _iter_external_nl_events(*, token: str, cdk: str, job_id: str):
                 or any(word in current_error for word in ("稍后", "重试", "temporary", "pending"))
             )
             if status_code in {429, 500, 503} or temporary_400:
-                yield "log", {"message": f"外部荷兰状态查询暂时返回 HTTP {status_code}，继续轮询"}
+                yield "log", {"message": f"外部荷兰 iDEAL 状态查询暂时返回 HTTP {status_code}，继续轮询"}
                 continue
             if status_code < 200 or status_code >= 300 or not isinstance(current, dict):
-                raise RuntimeError(_extract_error_message(current) or f"外部荷兰状态查询 HTTP {status_code}")
-            status = str(current.get("status") or current.get("stage") or "").strip().lower()
-            if status != last_status:
-                last_status = status
-                yield "log", {"message": f"外部荷兰任务状态：{status or 'unknown'}"}
-            if _external_nl_has_artifact(current) and status in {"ready", "pending_payment", "paid", "success"}:
-                yield "result", {"result": _normalize_external_nl_result(current, base)}
+                raise RuntimeError(_extract_error_message(current) or f"外部荷兰 iDEAL 状态查询 HTTP {status_code}")
+            task = current.get("task") if isinstance(current.get("task"), dict) else {}
+            state = str(task.get("state") or "").strip().lower()
+            if state != last_state:
+                last_state = state
+                yield "log", {"message": f"外部荷兰 iDEAL 任务状态：{state or 'unknown'}"}
+            for event in current.get("events") if isinstance(current.get("events"), list) else []:
+                message = str((event or {}).get("message") or "").strip()
+                if message:
+                    yield "log", {"message": message[:300]}
+            cursor = int(current.get("cursor") or cursor)
+            result_cursor = int(current.get("result_cursor") or result_cursor)
+            results = current.get("results") if isinstance(current.get("results"), list) else []
+            result = next((row for row in results if isinstance(row, dict) and _external_ideal_has_artifact(row)), None)
+            if result:
+                yield "result", {"result": _normalize_external_ideal_result(result, base, task_id)}
                 return
-            if status in {"failed", "expired", "cancelled", "canceled"} or current.get("ok") is False:
-                raise RuntimeError(_extract_error_message(current) or f"外部荷兰任务状态：{status or 'failed'}")
-        raise TimeoutError(f"外部荷兰提链等待结果超时（{event_timeout}秒），task_id={task_id}")
+            terminal = state in {"success", "partial", "failed", "cancelled", "canceled"}
+            has_more = bool(current.get("events_has_more") or current.get("results_has_more"))
+            if terminal and not has_more:
+                status_code, complete, headers = request_json(
+                    "GET",
+                    f"{base}/api/task-results?task_id={quote(task_id, safe='')}",
+                    headers=task_headers,
+                )
+                complete_results = complete.get("results") if isinstance(complete, dict) and isinstance(complete.get("results"), list) else []
+                result = next((row for row in complete_results if isinstance(row, dict) and _external_ideal_has_artifact(row)), None)
+                if result:
+                    yield "result", {"result": _normalize_external_ideal_result(result, base, task_id)}
+                    return
+                raise RuntimeError(_extract_error_message(task) or _extract_error_message(complete) or f"外部荷兰 iDEAL 任务状态：{state or 'failed'}")
+        raise TimeoutError(f"外部荷兰 iDEAL 提链等待结果超时（{event_timeout}秒），task_id={task_id}")
     finally:
         try:
             if s is not None:
@@ -429,8 +462,8 @@ def _run_extract(*, account_id: int, email: str, access_token: str, link_type: s
             "message": "提链任务已创建，等待结果",
         })
         events = (
-            _iter_external_nl_events(token=access_token, cdk=cdk, job_id=job_id)
-            if provider == "external_nl"
+            _iter_external_ideal_events(token=access_token, cdk=cdk, job_id=job_id)
+            if provider == "external_ideal"
             else _iter_upi_events(token=access_token, cdk=cdk, job_id=job_id)
         )
         for event, data in events:
@@ -491,7 +524,7 @@ def enqueue_account_extract(*, account_id: int, email: str, access_token: str, t
         return {"accepted": False, "busy": False, "error": "提链队列已满"}
     try:
         selected_provider = _provider(provider)
-        lt = "upi_external_nl" if selected_provider == "external_nl" else _link_type(link_type)
+        lt = "ideal_external" if selected_provider == "external_ideal" else _link_type(link_type)
         code = _cdk(cdk, provider=selected_provider)
         if not db.claim_account_extract(account_id, trigger=trigger, link_type=lt):
             _QUEUE_SLOTS.release()
