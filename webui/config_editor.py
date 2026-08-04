@@ -482,11 +482,15 @@ EDITABLE_FIELDS = [
     # ---- 提链 ----
     {
         "key": "EXTRACT_LINK_API_BASE", "file": "extract_link.py", "type": "str", "group": "提链",
-        "label": "提链服务地址", "help": "UPI 提链服务地址，默认 https://upi.newzoe.cloud",
+        "label": "内置UPI服务地址", "help": "注册机内置UPI提链服务地址，默认 https://upi.newzoe.cloud",
+    },
+    {
+        "key": "EXTRACT_LINK_EXTERNAL_NL_API_BASE", "file": "extract_link.py", "type": "str", "group": "提链",
+        "label": "外部荷兰服务地址", "help": "外部UPI服务地址，默认 https://ideal.169abc.xyz/upi；CDK由用户提交任务时填写",
     },
     {
         "key": "EXTRACT_LINK_CDK", "file": "extract_link.py", "type": "str", "group": "提链",
-        "label": "提链 CDK", "help": "创建提链任务和监听任务事件使用；成功提链扣 1 次",
+        "label": "内置UPI CDK", "help": "仅供内置UPI渠道使用；外部荷兰CDK由用户每次提交任务时填写",
         "storage": "env", "secret": True,
     },
     {

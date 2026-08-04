@@ -856,8 +856,9 @@ def create_app(auth_code: str | None = None) -> Flask:
     def api_extract_link_cdk():
         """查询当前配置或传入 CDK 的剩余次数。"""
         code = (request.args.get("code") or "").strip() or None
+        provider = (request.args.get("provider") or "builtin").strip()
         try:
-            return jsonify({"ok": True, **extract_link_service.query_cdk(cdk=code)})
+            return jsonify({"ok": True, **extract_link_service.query_cdk(cdk=code, provider=provider)})
         except Exception as exc:
             return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 400
 
@@ -888,6 +889,7 @@ def create_app(auth_code: str | None = None) -> Flask:
                 access_token=token,
                 trigger="manual",
                 link_type=data.get("link_type"),
+                provider=data.get("provider"),
                 cdk=data.get("cdk"),
             )
         except Exception as exc:
@@ -941,6 +943,7 @@ def create_app(auth_code: str | None = None) -> Flask:
                     access_token=token,
                     trigger="manual_bulk",
                     link_type=data.get("link_type"),
+                    provider=data.get("provider"),
                     cdk=data.get("cdk"),
                 )
             except Exception as exc:

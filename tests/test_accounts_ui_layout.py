@@ -66,6 +66,17 @@ def test_accounts_ui_exposes_twofa_and_password_filters():
     assert 'password=${encodeURIComponent(password)}' in text
 
 
+def test_extract_link_ui_supports_external_nl_user_cdk():
+    text = TEMPLATE.read_text(encoding="utf-8")
+
+    assert 'id="extractLinkPanel"' in text
+    assert 'name="extractLinkProvider" value="builtin"' in text
+    assert 'name="extractLinkProvider" value="external_nl"' in text
+    assert 'id="externalNlCdk" type="password"' in text
+    assert "provider === 'external_nl'" in text
+    assert "body.cdk = cdk" in text
+
+
 def test_email_pool_ui_exposes_status_filter():
     text = TEMPLATE.read_text(encoding="utf-8")
 
