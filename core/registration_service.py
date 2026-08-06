@@ -229,6 +229,20 @@ def _is_proxy_navigation_failure(error: object) -> bool:
     return "page.goto" in text and "timeout 30000ms exceeded" in text
 
 
+def get_auto_retry_limit() -> int:
+    """Return the hot-reloadable registration retry limit, clamped to 0..10."""
+    from config import register as register_cfg
+
+    raw = os.getenv(
+        "REGISTRATION_CF_AUTO_RETRIES",
+        str(getattr(register_cfg, "REGISTRATION_CF_AUTO_RETRIES", 3)),
+    )
+    try:
+        return max(0, min(10, int(raw or 0)))
+    except (TypeError, ValueError):
+        return 3
+
+
 def _maybe_auto_retry_cloudflare(job_id: int, error: object) -> dict | None:
     """认证拦截或代理导航失败时创建子任务，并随机选择另一固定出口。"""
     cloudflare_failure = _is_cloudflare_challenge_failure(error)
@@ -236,10 +250,7 @@ def _maybe_auto_retry_cloudflare(job_id: int, error: object) -> dict | None:
     if not cloudflare_failure and not navigation_failure:
         return None
     source = db.get_job(int(job_id)) or {}
-    try:
-        max_retries = max(0, min(10, int(os.getenv("REGISTRATION_CF_AUTO_RETRIES", "3") or 3)))
-    except (TypeError, ValueError):
-        max_retries = 3
+    max_retries = get_auto_retry_limit()
     attempt = int(source.get("retry_attempt") or 0)
     if attempt >= max_retries:
         reason_label = "Cloudflare" if cloudflare_failure else "代理导航超时"

@@ -2235,6 +2235,41 @@ def create_app(auth_code: str | None = None) -> Flask:
     # ----------------------------------------------------------
     # 注册任务
     # ----------------------------------------------------------
+    @app.get("/api/registration/settings")
+    def api_registration_settings_get():
+        return jsonify({
+            "ok": True,
+            "auto_retries": svc.get_auto_retry_limit(),
+            "editable": current_tenant() == "default",
+        })
+
+    @app.post("/api/registration/settings")
+    def api_registration_settings_set():
+        if current_tenant() != "default":
+            return jsonify({"ok": False, "error": "租户账号仅使用管理员共享注册设置"}), 403
+        data = request.get_json(silent=True) or {}
+        try:
+            auto_retries = int(data.get("auto_retries"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "失败自动重试次数需为 0~10 的整数"}), 400
+        if not 0 <= auto_retries <= 10:
+            return jsonify({"ok": False, "error": "失败自动重试次数需在 0~10 之间"}), 400
+
+        try:
+            result = config_editor.update_config({
+                "REGISTRATION_CF_AUTO_RETRIES": auto_retries,
+            })
+            import config as config_pkg
+            config_pkg.reload_all()
+        except Exception as exc:
+            logger.exception("注册失败重试次数写入失败")
+            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 500
+        return jsonify({
+            "ok": True,
+            "auto_retries": svc.get_auto_retry_limit(),
+            "updated": result.get("updated", []),
+        })
+
     @app.get("/api/jobs")
     def api_jobs():
         limit = request.args.get("limit", default=100, type=int)

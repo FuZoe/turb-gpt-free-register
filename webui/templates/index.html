@@ -504,6 +504,15 @@
               <input id="regWorkers" type="number" min="1" max="16" value="3">
             </label>
           </div>
+          <div>
+            <label class="fld">失败自动重试次数
+              <input id="regAutoRetries" type="number" min="0" max="10" value="3">
+              <span class="hint">0=关闭；1=失败后再试一次</span>
+            </label>
+          </div>
+          <div class="action-cell">
+            <button class="btn" id="btnSaveRegSettings">保存次数</button>
+          </div>
           <div class="action-cell">
             <button class="btn primary" id="btnStart">开始注册</button>
           </div>
@@ -1042,7 +1051,7 @@ function activateTab(tab, persist=true) {
   if (tab === 'outlook') loadOutlook();
   if (tab === 'proxies') loadProxyManager();
   if (tab === 'config') loadConfig();
-  if (tab === 'register') refreshJobs();
+  if (tab === 'register') { refreshJobs(); loadRegistrationSettings(); }
 }
 $$('nav button').forEach(b => b.addEventListener('click', () => activateTab(b.dataset.tab)));
 
@@ -1060,6 +1069,38 @@ async function loadSummary() {
 }
 
 // ---------- 注册 / 任务 ----------
+async function loadRegistrationSettings() {
+  try {
+    const r = await api('/api/registration/settings');
+    $('#regAutoRetries').value = String(r.auto_retries ?? 3);
+    $('#regAutoRetries').disabled = !r.editable;
+    $('#btnSaveRegSettings').disabled = !r.editable;
+    $('#btnSaveRegSettings').title = r.editable ? '保存后立即生效' : '该设置由主授权码管理';
+  } catch(e) {
+    $('#btnSaveRegSettings').title = '读取设置失败：' + e.message;
+  }
+}
+$('#btnSaveRegSettings').addEventListener('click', async () => {
+  const autoRetries = parseInt($('#regAutoRetries').value, 10);
+  if (!Number.isInteger(autoRetries) || autoRetries < 0 || autoRetries > 10) {
+    showToast('失败自动重试次数需为 0~10 的整数');
+    return;
+  }
+  $('#btnSaveRegSettings').disabled = true;
+  try {
+    const r = await api('/api/registration/settings', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({auto_retries:autoRetries}),
+    });
+    $('#regAutoRetries').value = String(r.auto_retries);
+    showToast(`失败自动重试次数已设为 ${r.auto_retries}，立即生效`);
+  } catch(e) {
+    showToast('保存失败：' + e.message);
+  } finally {
+    $('#btnSaveRegSettings').disabled = false;
+  }
+});
 $('#btnStart').addEventListener('click', async () => {
   const count = parseInt($('#regCount').value || '1', 10);
   const workers = parseInt($('#regWorkers').value || '3', 10);

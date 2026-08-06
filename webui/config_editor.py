@@ -54,6 +54,10 @@ EDITABLE_FIELDS = [
         "key": "REGISTRATION_DRIVER", "file": "roxybrowser.py", "type": "str", "group": "注册方式",
         "label": "注册驱动", "help": "默认推荐 roxy；protocol=纯协议，容易封号不建议；roxy=RoxyBrowser；cloak=CloakBrowser；browser_use=Browser Use Cloud+Playwright；skyvern=Skyvern Browser Sessions+Playwright",
     },
+    {
+        "key": "REGISTRATION_CF_AUTO_RETRIES", "file": "register.py", "type": "int", "group": "注册方式",
+        "label": "失败自动重试次数", "help": "Cloudflare 或代理导航失败后自动换线路重试；0=关闭，1=失败后再试一次，最大 10",
+    },
 
     # ---- CloakBrowser ----
     {
