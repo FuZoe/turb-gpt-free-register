@@ -12,6 +12,7 @@ Flask 本地控制台。
 """
 import base64
 import binascii
+import json
 import logging
 import re
 import threading
@@ -176,7 +177,48 @@ def _account_secret_value(row: dict, field: str) -> str:
         return str(row.get("registration_password") or "")
     if field == "codex_agent_token":
         return str(row.get("codex_agent_token") or "")
-    raise ValueError("field 仅支持 access_token/copy_line/credentials_line/registration_password/codex_agent_token")
+    if field == "session":
+        return _account_session_value(row)
+    raise ValueError("field 仅支持 access_token/copy_line/credentials_line/registration_password/codex_agent_token/session")
+
+
+def _account_session_value(row: dict) -> str:
+    """返回 /api/auth/session 的完整 JSON；旧账号缺字段时按已存信息补全。"""
+    extra = {}
+    try:
+        raw_extra = row.get("extra_json") or ""
+        if raw_extra:
+            parsed = json.loads(raw_extra)
+            if isinstance(parsed, dict):
+                extra = parsed
+    except (TypeError, ValueError):
+        extra = {}
+
+    session = extra.get("session")
+    if not isinstance(session, dict) or not session:
+        session = {}
+        session["accessToken"] = str(row.get("access_token") or "")
+        user = extra.get("user")
+        if isinstance(user, dict) and user:
+            session["user"] = user
+        else:
+            session["user"] = {
+                "id": row.get("user_id"),
+                "name": row.get("user_name"),
+                "email": row.get("email"),
+            }
+        account = extra.get("account")
+        if isinstance(account, dict) and account:
+            session["account"] = account
+        else:
+            session["account"] = {"planType": row.get("plan_type")}
+        expires = extra.get("expires") or row.get("expires_at")
+        if expires:
+            session["expires"] = expires
+    session_user = session.get("user") if isinstance(session.get("user"), dict) else {}
+    if not session.get("accessToken") and not session_user.get("id") and not session_user.get("name"):
+        return ""
+    return json.dumps(session, ensure_ascii=False)
 
 
 def _compact_job_for_list(row: dict) -> dict:

@@ -1901,6 +1901,7 @@ def run_browser_use_registration(
                 proxy_used=proxy or f"{provider_prefix}:{session_info_open.proxy_country_code or 'default'}",
                 batch_dir=batch_dir,
                 extra={
+                    "session": session_info,
                     "user": session_info.get("user"),
                     "account": session_info.get("account"),
                     "expires": session_info.get("expires"),

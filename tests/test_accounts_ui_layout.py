@@ -24,6 +24,10 @@ def test_accounts_txt_uses_email_password_totp_credentials_line():
     assert ">复制AT</button>" in text
     assert "data-account-show-agent-token" in text
 
+    assert ">复制Session</button>" in text
+    assert "data-account-copy-secret=\"session\"" in text
+    assert "Session 已复制" in text
+
 
 def test_accounts_ui_exposes_queued_twofa_automation():
     text = TEMPLATE.read_text(encoding="utf-8")

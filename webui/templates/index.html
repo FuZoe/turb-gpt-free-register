@@ -2050,7 +2050,7 @@ function renderAccounts() {
       <td>${_codexCell(r)}</td>
       <td class="actions actions-cell">
         <div class="account-row-actions">
-          <div class="account-action-group"><button class="primary" data-account-copy-secret="access_token" data-account-id="${esc(r.id)}" ${r.has_access_token ? '' : 'disabled'}>复制AT</button> <button class="good" data-account-copy-secret="copy_line" data-account-id="${esc(r.id)}">复制整行</button>${r.has_registration_password ? ` <button class="good" data-account-copy-secret="credentials_line" data-account-id="${esc(r.id)}" title="复制 邮箱----ChatGPT密码----TOTP">复制密码2FA</button>` : ''}</div>
+          <div class="account-action-group"><button class="primary" data-account-copy-secret="access_token" data-account-id="${esc(r.id)}" ${r.has_access_token ? '' : 'disabled'}>复制AT</button> <button class="good" data-account-copy-secret="session" data-account-id="${esc(r.id)}" ${r.has_access_token ? '' : 'disabled'} title="复制 /api/auth/session 完整内容">复制Session</button> <button class="good" data-account-copy-secret="copy_line" data-account-id="${esc(r.id)}">复制整行</button>${r.has_registration_password ? ` <button class="good" data-account-copy-secret="credentials_line" data-account-id="${esc(r.id)}" title="复制 邮箱----ChatGPT密码----TOTP">复制密码2FA</button>` : ''}</div>
           <div class="account-action-group">${_codexAgentCell(r)}</div>
           <div class="account-action-group"><button data-account-note="${esc(r.id)}" title="设置/清空该账号备注">备注</button> ${_planAction(r)} ${_extractLinkAction(r)}</div>
           <div class="account-action-group">${_codexAction(r)} <button data-codex-log="${esc(r.email)}" title="查看该账号最近一次 Codex 补跑日志">补跑日志</button></div>
@@ -2173,7 +2173,7 @@ $('#accountsBody').addEventListener('click', async (e) => {
       const value = await fetchOneAccountSecret(id, field);
       if (!value) { showToast('可复制内容为空'); return; }
       copyText(value);
-      showToast(field === 'access_token' ? 'Token 已复制' : field === 'codex_agent_token' ? 'Agent Token 已复制' : '账号整行已复制');
+      showToast(field === 'access_token' ? 'Token 已复制' : field === 'codex_agent_token' ? 'Agent Token 已复制' : field === 'session' ? 'Session 已复制' : '账号整行已复制');
     } catch(err) {
       showToast('复制失败: ' + err.message);
     } finally {
