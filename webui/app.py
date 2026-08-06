@@ -291,9 +291,33 @@ def create_app(auth_code: str | None = None) -> Flask:
     # ----------------------------------------------------------
     # 页面
     # ----------------------------------------------------------
+    @app.get("/register")
+    def page_register():
+        return render_template("index.html", tab="register")
+
+    @app.get("/accounts")
+    def page_accounts():
+        return render_template("index.html", tab="accounts")
+
+    @app.get("/codex")
+    def page_codex():
+        return render_template("index.html", tab="codex")
+
+    @app.get("/outlook")
+    def page_outlook():
+        return render_template("index.html", tab="outlook")
+
+    @app.get("/proxies")
+    def page_proxies():
+        return render_template("index.html", tab="proxies")
+
+    @app.get("/config")
+    def page_config():
+        return render_template("index.html", tab="config")
+
     @app.get("/")
     def index():
-        return render_template("index.html")
+        return render_template("index.html", tab="register")
 
     # ----------------------------------------------------------
     # 统计概览

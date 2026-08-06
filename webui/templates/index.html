@@ -475,6 +475,7 @@
     <button data-tab="config">配置</button>
   </div>
 </nav>
+<script nonce="{{ '' if not tab else '' }}">window.__INITIAL_TAB = "{{ tab or '' }}";</script>
 
 <div class="runtime-resource" id="runtimeResource" title="systemd cgroup 实时用量；内存硬上限由 MemoryMax 控制">
   <div class="runtime-resource-head">
@@ -1040,12 +1041,15 @@ async function loadRuntimeResources() {
 }
 
 // ---------- Tab 切换 ----------
-function activateTab(tab, persist=true) {
+function activateTab(tab, persist=true, pushState=true) {
   const allowed = ['register','accounts','codex','outlook','proxies','config'];
   if (!allowed.includes(tab)) tab = 'register';
   $$('nav button').forEach(x => x.classList.toggle('active', x.dataset.tab === tab));
   allowed.forEach(t => $('#tab-'+t).classList.toggle('hidden', t !== tab));
   if (persist) localStorage.setItem('gpt_console_active_tab', tab);
+  if (pushState && location.hash !== '#'+tab) {
+    history.pushState({tab}, '', '#'+tab);
+  }
   if (tab === 'accounts') loadAccounts();
   if (tab === 'codex') loadCodex();
   if (tab === 'outlook') loadOutlook();
@@ -1053,7 +1057,13 @@ function activateTab(tab, persist=true) {
   if (tab === 'config') loadConfig();
   if (tab === 'register') { refreshJobs(); loadRegistrationSettings(); }
 }
-$$('nav button').forEach(b => b.addEventListener('click', () => activateTab(b.dataset.tab)));
+$$('nav button').forEach(b => b.addEventListener('click', () => { activateTab(b.dataset.tab); }));
+
+// hash 变化时自动切 tab（浏览器前进/后退）
+window.addEventListener('hashchange', () => {
+  const tab = (location.hash || '#register').replace('#', '');
+  activateTab(tab, true, false);
+});
 
 // ---------- 概览 ----------
 async function loadSummary() {
@@ -4186,7 +4196,7 @@ document.addEventListener('click', (e) => {
 loadSummary();
 loadRuntimeResources();
 initRuntimeResourceBox();
-activateTab(localStorage.getItem('gpt_console_active_tab') || 'register', false);
+(function(){var t=location.hash.replace('#','')||window.__INITIAL_TAB||localStorage.getItem('gpt_console_active_tab')||'register';if(!location.hash)history.replaceState({tab:t},'','#'+t);activateTab(t,false,false);})();
 jobsTimer = setInterval(() => { if (!$('#tab-register').classList.contains('hidden')) refreshJobs(); }, 3000);
 setInterval(loadSummary, 5000);
 setInterval(loadRuntimeResources, 2000);

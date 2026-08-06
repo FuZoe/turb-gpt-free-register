@@ -99,3 +99,29 @@ def test_runtime_resource_box_supports_drag_and_resize():
     assert 'resize: both' in text
     assert 'cursor:grab' in text
     assert "'turb_runtime_box_bounds'" in text
+
+
+def test_nav_uses_separate_urls():
+    text = TEMPLATE.read_text(encoding="utf-8")
+
+    assert "history.pushState({tab}" in text
+    assert "location.hash !== " in text
+    assert "window.addEventListener('hashchange'" in text
+    assert "window.__INITIAL_TAB" in text
+    assert "location.hash.replace" in text
+
+
+def test_each_page_has_dedicated_flask_route():
+    from webui.app import create_app
+
+    app = create_app(auth_code="test-auth").test_client()
+    app.environ_base["HTTP_X_AUTH_CODE"] = "test-auth"
+
+    for path in ("/register", "/accounts", "/codex", "/outlook", "/proxies", "/config"):
+        r = app.get(path)
+        assert r.status_code == 200, path
+        assert r.status_code == 200, path
+
+    # / also returns 200
+    r = app.get("/")
+    assert r.status_code == 200
