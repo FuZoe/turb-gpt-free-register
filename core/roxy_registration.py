@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 
 from config import roxybrowser as _cfg
 from config import twofa as _twofa_cfg
-from core.account_export import save_account_data
+from core.account_export import inject_session_token, save_account_data
 from core.email_provider import wait_for_otp, resolve_email_source
 from core.humanize import delay as human_delay
 from core.roxybrowser_client import RoxyBrowserClient, RoxyOpenResult
@@ -1645,6 +1645,10 @@ def _read_chatgpt_session_once(driver) -> dict | None:
     if result and result.get("ok"):
         data = result.get("data") or {}
         if data.get("accessToken"):
+            try:
+                data = inject_session_token(data, driver.get_cookies())
+            except Exception:
+                pass
             logger.info("%s /api/auth/session 已返回 accessToken", _log_prefix(driver))
             return data
         logger.info("%s 等待 ChatGPT session 写入 accessToken，当前响应 keys=%s", _log_prefix(driver), list(data.keys()))

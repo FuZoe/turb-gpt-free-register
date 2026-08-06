@@ -21,7 +21,7 @@ from typing import Any
 
 from config import browser_use as _cfg
 from config import twofa as _twofa_cfg
-from core.account_export import save_account_data
+from core.account_export import inject_session_token, save_account_data
 from core.browser_use_client import BrowserUseClient
 from core.email_provider import resolve_email_source, wait_for_otp
 from core.humanize import delay as human_delay
@@ -1498,6 +1498,11 @@ def _read_chatgpt_session_via_context(context, timeout_ms: int = 5000) -> dict |
         except Exception:
             data = {"status": resp.status, "text": (resp.text() or "")[:500]}
         if isinstance(data, dict):
+            if data.get("accessToken"):
+                try:
+                    data = inject_session_token(data, context.cookies())
+                except Exception:
+                    pass
             data.setdefault("_http_status", resp.status)
         return data
     except Exception as exc:
@@ -1511,7 +1516,7 @@ def _read_chatgpt_session_via_page(page, timeout_ms: int = 5000) -> dict | None:
     except Exception:
         pass
     try:
-        return page.evaluate(
+        data = page.evaluate(
             """async ({timeoutMs}) => {
               const ctrl = new AbortController();
               const timer = setTimeout(() => ctrl.abort('session-timeout'), timeoutMs);
@@ -1531,6 +1536,12 @@ def _read_chatgpt_session_via_page(page, timeout_ms: int = 5000) -> dict | None:
             }""",
             {"timeoutMs": timeout_ms},
         )
+        if isinstance(data, dict) and data.get("accessToken"):
+            try:
+                data = inject_session_token(data, page.context.cookies())
+            except Exception:
+                pass
+        return data
     except Exception as exc:
         return {"_error": f"{type(exc).__name__}: {exc}"}
 

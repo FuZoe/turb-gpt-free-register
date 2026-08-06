@@ -2171,7 +2171,7 @@ $('#accountsBody').addEventListener('click', async (e) => {
     copySecretBtn.disabled = true;
     try {
       const value = await fetchOneAccountSecret(id, field);
-      if (!value) { showToast('可复制内容为空'); return; }
+      if (!value) { showToast(field === 'session' ? '该账号未保存完整 Session（仅新注册账号包含），无法复制' : '可复制内容为空'); return; }
       copyText(value);
       showToast(field === 'access_token' ? 'Token 已复制' : field === 'codex_agent_token' ? 'Agent Token 已复制' : field === 'session' ? 'Session 已复制' : '账号整行已复制');
     } catch(err) {

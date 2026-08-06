@@ -183,7 +183,10 @@ def _account_secret_value(row: dict, field: str) -> str:
 
 
 def _account_session_value(row: dict) -> str:
-    """返回 /api/auth/session 的完整 JSON；旧账号缺字段时按已存信息补全。"""
+    """返回注册时保存的 /api/auth/session 原始 JSON（含 sessionToken）。
+
+    不做拼凑：老账号未保存完整 session 时返回空字符串，前端会提示。
+    """
     extra = {}
     try:
         raw_extra = row.get("extra_json") or ""
@@ -196,27 +199,6 @@ def _account_session_value(row: dict) -> str:
 
     session = extra.get("session")
     if not isinstance(session, dict) or not session:
-        session = {}
-        session["accessToken"] = str(row.get("access_token") or "")
-        user = extra.get("user")
-        if isinstance(user, dict) and user:
-            session["user"] = user
-        else:
-            session["user"] = {
-                "id": row.get("user_id"),
-                "name": row.get("user_name"),
-                "email": row.get("email"),
-            }
-        account = extra.get("account")
-        if isinstance(account, dict) and account:
-            session["account"] = account
-        else:
-            session["account"] = {"planType": row.get("plan_type")}
-        expires = extra.get("expires") or row.get("expires_at")
-        if expires:
-            session["expires"] = expires
-    session_user = session.get("user") if isinstance(session.get("user"), dict) else {}
-    if not session.get("accessToken") and not session_user.get("id") and not session_user.get("name"):
         return ""
     return json.dumps(session, ensure_ascii=False)
 

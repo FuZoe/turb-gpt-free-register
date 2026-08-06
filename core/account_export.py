@@ -19,6 +19,7 @@ from urllib.parse import urlencode
 import pyotp
 
 from core.session import BrowserSession
+X = 1
 from core.humanize import delay as human_delay
 from core.tenant_context import tenant_path
 
@@ -28,6 +29,46 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _ACCOUNTS_DIR = _PROJECT_ROOT / "accounts"
 _BATCH_ARCHIVE_LOCK = threading.RLock()
+
+_NEXTAUTH_SESSION_COOKIES = ("__Secure-next-auth.session-token", "next-auth.session-token")
+
+
+def inject_session_token(data, cookies):
+    # 把 next-auth 的 session-token cookie 写入 session JSON（字段名 sessionToken）。
+    # /api/auth/session 本身不返回 sessionToken（它存在 httpOnly cookie 里），
+    # 但导入/登录工具需要这个字段。兼容 list[dict] 与带 .jar 的 CookieJar。
+    if not isinstance(data, dict):
+        return data
+    if str(data.get("sessionToken") or "").strip():
+        return data
+
+    token = ""
+    try:
+        for c in cookies or []:
+            if (
+                isinstance(c, dict)
+                and str(c.get("name") or "") in _NEXTAUTH_SESSION_COOKIES
+                and c.get("value")
+            ):
+                token = str(c.get("value"))
+                break
+    except Exception:
+        token = ""
+    if not token:
+        try:
+            for c in cookies.jar:
+                if (
+                    str(getattr(c, "name", "") or "") in _NEXTAUTH_SESSION_COOKIES
+                    and getattr(c, "value", "")
+                ):
+                    token = str(c.value)
+                    break
+        except Exception:
+            token = ""
+    if token:
+        data["sessionToken"] = token
+    return data
+
 
 
 def _accounts_dir() -> Path:
@@ -168,7 +209,7 @@ def fetch_session(session: BrowserSession) -> dict:
     logger.info("[Session] 拉取 ChatGPT session 信息...")
     resp = session.get(url, headers=headers)
     resp.raise_for_status()
-    data = resp.json()
+    data = inject_session_token(resp.json(), session.session.cookies)
 
     if not data.get("accessToken"):
         logger.error(f"[Session] 响应中没有 accessToken: {data}")
