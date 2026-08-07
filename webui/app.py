@@ -136,6 +136,11 @@ def _compact_account_for_list(row: dict) -> dict:
     if row.get("plan_check_status") in ("queued", "running") or row.get("plan_check_ok") is False:
         out["plan_check_ok"] = row.get("plan_check_ok")
 
+    # Gcash 零元试用资格
+    out["gcash_eligible"] = row.get("gcash_eligible")
+    out["gcash_checked_at"] = row.get("gcash_checked_at")
+    out["gcash_error"] = row.get("gcash_error")
+
     # 下面字段仅在有值时返回，避免每行堆满 null/空字符串/内部状态。
     optional_keys = (
         # 套餐展示补充：付费到期/折扣/失败原因。

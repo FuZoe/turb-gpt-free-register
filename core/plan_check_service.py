@@ -12,6 +12,7 @@ from datetime import datetime
 from config import proxy as proxy_cfg
 from core import db
 from core.chatgpt_plan import check_account_plan
+from core.chatgpt_gcash import check_gcash_zero_trial
 from core.tenant_context import current_tenant, run_for_tenant
 
 logger = logging.getLogger(__name__)
@@ -107,6 +108,16 @@ def _run_plan_check(
                 )
 
         db.update_account_plan_check(acc_id=account_id, result=result)
+
+        # 套餐查询成功后顺带检测 Gcash 零元试用资格
+        if result.get("ok") and trigger != "gcash_only":
+            gcash_result = check_gcash_zero_trial(
+                access_token,
+                proxy=proxy,
+                timeout=12.0,
+            )
+            db.update_account_plan_check(acc_id=account_id, result=gcash_result)
+
         if result.get("ok"):
             logger.info(
                 "[Plan] 后台查询成功: %s, plan=%s, plus_trial=%s, trigger=%s",

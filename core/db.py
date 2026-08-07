@@ -1241,6 +1241,14 @@ def update_account_plan_check(acc_id: int | None = None, email: str | None = Non
         row["token_expired"] = result.get("token_expired")
         row["token_expires_at"] = result.get("token_expires_at")
         row["plan_check_result_json"] = json.dumps(result, ensure_ascii=False)
+
+        # Gcash 零元试用资格（来自 gcash check 结果）
+        if result.get("gcash_eligible") is not None:
+            row["gcash_eligible"] = bool(result.get("gcash_eligible"))
+        if result.get("gcash_checked_at") is not None:
+            row["gcash_checked_at"] = result.get("gcash_checked_at")
+        if result.get("gcash_error") is not None:
+            row["gcash_error"] = result.get("gcash_error")
         row["updated_at"] = _now()
         _save_accounts(accounts)
         return True

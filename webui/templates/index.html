@@ -1958,11 +1958,15 @@ function _planCell(r) {
     if (!checkedOk) {
       return `<span class="pill status-running" title="${title}">${esc(plan)}（待查资格）</span>`;
     }
-    const text = r.plus_trial_eligible ? 'free(可Plus试用)' : 'free';
-    const cls = r.plus_trial_eligible ? 'status-success' : 'status-used';
-    const t = r.plus_trial_eligible ? `${title}；Plus 试用资格可用` : title;
-    return `<span class="pill ${cls}" title="${t}">${esc(text)}</span>`;
-  }
+    const gcash = r.gcash_eligible === true;
+    const gcashSuffix = gcash ? "·Gcash" : "";
+    const displayText = r.plus_trial_eligible ? `free(可Plus试用${gcashSuffix})` : (gcash ? "free(Gcash可用)" : "free");
+    const cls = (r.plus_trial_eligible || gcash) ? "status-success" : "status-used";
+    const hints = [];
+    if (r.plus_trial_eligible) hints.push("Plus 试用资格可用");
+    if (gcash) hints.push("Gcash 零元试用可用");
+    const t = hints.length ? `${title}；${hints.join("；")}` : title;
+    return `<span class=\"pill ${cls}\" title=\"${t}\">${esc(displayText)}</span>`;
 
   const isPaid = lower.includes('plus') || lower.includes('pro') || lower.includes('team') || lower.includes('go');
   const cls = isPaid ? 'status-success' : 'status-running';
