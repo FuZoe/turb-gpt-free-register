@@ -1966,7 +1966,7 @@ function _planCell(r) {
     if (r.plus_trial_eligible) hints.push("Plus 试用资格可用");
     if (gcash) hints.push("Gcash 零元试用可用");
     const t = hints.length ? `${title}；${hints.join("；")}` : title;
-    return `<span class=\"pill ${cls}\" title=\"${t}\">${esc(displayText)}</span>`;
+    return `<span class="pill ${cls}" title="${t}">${esc(displayText)}</span>`;
 
   const isPaid = lower.includes('plus') || lower.includes('pro') || lower.includes('team') || lower.includes('go');
   const cls = isPaid ? 'status-success' : 'status-running';
