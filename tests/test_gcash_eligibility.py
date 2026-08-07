@@ -3,6 +3,8 @@ from core import chatgpt_gcash
 
 
 def test_gcash_check_keeps_explicit_false(monkeypatch):
+    seen = {}
+
     class Response:
         status_code = 200
         text = '{"eligible": false}'
@@ -11,7 +13,8 @@ def test_gcash_check_keeps_explicit_false(monkeypatch):
             return {"eligible": False}
 
     class Session:
-        def post(self, *_args, **_kwargs):
+        def post(self, *_args, **kwargs):
+            seen.update(kwargs.get("headers") or {})
             return Response()
 
         def close(self):
@@ -33,6 +36,8 @@ def test_gcash_check_keeps_explicit_false(monkeypatch):
     assert result["ok"] is True
     assert result["gcash_eligible"] is False
     assert result["gcash_http_status"] == 200
+    assert seen["user-agent"].startswith("Mozilla/5.0 (Linux; Android 15")
+    assert seen["sec-ch-ua-mobile"] == "?1"
 
 
 def test_gcash_update_does_not_overwrite_plan_check(tmp_path, monkeypatch):

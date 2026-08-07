@@ -75,9 +75,19 @@ def check_gcash_zero_trial(
         headers = env._get_common_headers()
         headers.update({
             "accept": "application/json",
+            "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "cache-control": "no-cache",
             "content-type": "application/json",
             "origin": "https://ai.pupux.xyz",
+            "pragma": "no-cache",
             "referer": "https://ai.pupux.xyz/",
+            "sec-ch-ua": '"Not;A=Brand";v="8", "Chromium";v="150", "Google Chrome";v="150"',
+            "sec-ch-ua-mobile": "?1",
+            "sec-ch-ua-platform": '"Android"',
+            "sec-fetch-dest": "empty",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-site": "same-origin",
+            "user-agent": "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Mobile Safari/537.36",
         })
 
         resp = env.session.post(
