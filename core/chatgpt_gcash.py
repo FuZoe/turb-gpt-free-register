@@ -18,6 +18,30 @@ def now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
+def _as_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "eligible", "available"}:
+            return True
+        if normalized in {"false", "0", "no", "ineligible", "unavailable"}:
+            return False
+    return None
+
+
+def _find_eligible_value(data: dict[str, Any]) -> bool | None:
+    for source in (data, data.get("data"), data.get("result")):
+        if not isinstance(source, dict):
+            continue
+        for key in ("eligible", "can_trial", "can_use_trial", "zero_trial_eligible"):
+            if key in source:
+                return _as_bool(source.get(key))
+    return None
+
+
 def check_gcash_zero_trial(
     token: str,
     *,
@@ -69,8 +93,9 @@ def check_gcash_zero_trial(
         if not (200 <= http_status < 300):
             return {
                 "ok": False,
-                "gcash_eligible": False,
+                "gcash_eligible": None,
                 "gcash_checked_at": now_iso(),
+                "gcash_http_status": http_status,
                 "gcash_error": f"HTTP {http_status}",
                 "gcash_response": response_text[:500],
             }
@@ -79,29 +104,21 @@ def check_gcash_zero_trial(
         if not isinstance(data, dict):
             return {
                 "ok": False,
-                "gcash_eligible": False,
+                "gcash_eligible": None,
                 "gcash_checked_at": now_iso(),
+                "gcash_http_status": http_status,
                 "gcash_error": "响应不是 JSON 对象",
                 "gcash_response": response_text[:500],
             }
 
-        # 尝试从响应中提取 eligible 字段；不同 API 可能用不同 key
-        eligible = (
-            data.get("eligible")
-            or data.get("ok")
-            or data.get("success")
-            or data.get("can_trial")
-        )
-        if eligible is None and isinstance(data.get("data"), dict):
-            eligible = data["data"].get("eligible") or data["data"].get("can_trial")
-
         error_msg = data.get("error") or data.get("message") or ""
-        eligible_bool = bool(eligible) if eligible is not None else None
+        eligible_bool = _find_eligible_value(data)
 
         result = {
             "ok": True,
             "gcash_eligible": eligible_bool,
             "gcash_checked_at": now_iso(),
+            "gcash_http_status": http_status,
             "gcash_error": error_msg or None,
             "gcash_raw": data,
         }
@@ -116,7 +133,7 @@ def check_gcash_zero_trial(
         logger.debug("[Gcash] 检测失败: %s: %s", type(exc).__name__, exc, exc_info=True)
         return {
             "ok": False,
-            "gcash_eligible": False,
+            "gcash_eligible": None,
             "gcash_checked_at": now_iso(),
             "gcash_error": f"{type(exc).__name__}: {exc}",
         }

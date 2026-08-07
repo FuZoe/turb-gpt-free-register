@@ -109,14 +109,14 @@ def _run_plan_check(
 
         db.update_account_plan_check(acc_id=account_id, result=result)
 
-        # 套餐查询成功后顺带检测 Gcash 零元试用资格
-        if result.get("ok") and trigger != "gcash_only":
+        # Gcash 是独立支付渠道资格，不能用它的结果覆盖 OpenAI 套餐查询。
+        if result.get("ok") and str(result.get("current_plan_type") or "").lower() == "free":
             gcash_result = check_gcash_zero_trial(
                 access_token,
                 proxy=proxy,
                 timeout=12.0,
             )
-            db.update_account_plan_check(acc_id=account_id, result=gcash_result)
+            db.update_account_gcash_check(acc_id=account_id, result=gcash_result)
 
         if result.get("ok"):
             logger.info(

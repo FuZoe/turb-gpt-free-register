@@ -1925,6 +1925,16 @@ function _discountLabel(r) {
   if (!Number.isNaN(n)) return `${n}折扣`;
   return `${amount}折扣`;
 }
+function _gcashPlanPill(r) {
+  const checkedAt = r.gcash_checked_at || '';
+  const error = r.gcash_error || '';
+  const title = [checkedAt ? `检测: ${checkedAt}` : '', error].filter(Boolean).join('；');
+  if (!checkedAt) return '<span class="pill status-running" title="尚未执行 Gcash 检测">Gcash：未检测</span>';
+  if (r.gcash_check_ok === false) return `<span class="pill status-failed" title="${esc(title)}">Gcash：失败</span>`;
+  if (r.gcash_eligible === true) return `<span class="pill status-success" title="${esc(title)}">Gcash：可用</span>`;
+  if (r.gcash_eligible === false) return `<span class="pill status-used" title="${esc(title)}">Gcash：不可用</span>`;
+  return `<span class="pill status-running" title="${esc(title || '接口未返回资格字段')}">Gcash：待判定</span>`;
+}
 function _planCell(r) {
   const ok = r.plan_check_ok;
   const err = r.plan_check_error || '';
@@ -1958,15 +1968,12 @@ function _planCell(r) {
     if (!checkedOk) {
       return `<span class="pill status-running" title="${title}">${esc(plan)}（待查资格）</span>`;
     }
-    const gcash = r.gcash_eligible === true;
-    const gcashSuffix = gcash ? "·Gcash" : "";
-    const displayText = r.plus_trial_eligible ? `free(可Plus试用${gcashSuffix})` : (gcash ? "free(Gcash可用)" : "free");
-    const cls = (r.plus_trial_eligible || gcash) ? "status-success" : "status-used";
+    const displayText = r.plus_trial_eligible ? 'free(可Plus试用)' : 'free';
+    const cls = r.plus_trial_eligible ? 'status-success' : 'status-used';
     const hints = [];
     if (r.plus_trial_eligible) hints.push("Plus 试用资格可用");
-    if (gcash) hints.push("Gcash 零元试用可用");
     const t = hints.length ? `${title}；${hints.join("；")}` : title;
-    return `<span class="pill ${cls}" title="${t}">${esc(displayText)}</span>`;
+    return `<div class="extract-link-cell"><span class="pill ${cls}" title="${t}">${esc(displayText)}</span>${_gcashPlanPill(r)}</div>`;
 
   }
 

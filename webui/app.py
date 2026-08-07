@@ -138,6 +138,7 @@ def _compact_account_for_list(row: dict) -> dict:
 
     # Gcash 零元试用资格
     out["gcash_eligible"] = row.get("gcash_eligible")
+    out["gcash_check_ok"] = row.get("gcash_check_ok")
     out["gcash_checked_at"] = row.get("gcash_checked_at")
     out["gcash_error"] = row.get("gcash_error")
 

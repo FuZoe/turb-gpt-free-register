@@ -1254,6 +1254,31 @@ def update_account_plan_check(acc_id: int | None = None, email: str | None = Non
         return True
 
 
+def update_account_gcash_check(acc_id: int | None = None, email: str | None = None, result: dict | None = None) -> bool:
+    """仅写入 Gcash 检测状态，绝不改变 OpenAI 套餐查询结果。"""
+    result = result or {}
+    with _LOCK:
+        accounts = _load_accounts()
+        target_email = (email or "").lower()
+        row = next((
+            r for r in accounts
+            if (acc_id is not None and int(r.get("id") or 0) == int(acc_id))
+            or (target_email and (r.get("email") or "").lower() == target_email)
+        ), None)
+        if row is None:
+            return False
+
+        row["gcash_check_ok"] = bool(result.get("ok"))
+        row["gcash_checked_at"] = result.get("gcash_checked_at") or _now()
+        row["gcash_http_status"] = result.get("gcash_http_status")
+        row["gcash_error"] = result.get("gcash_error") or None
+        if result.get("gcash_eligible") is not None:
+            row["gcash_eligible"] = bool(result.get("gcash_eligible"))
+        row["updated_at"] = _now()
+        _save_accounts(accounts)
+        return True
+
+
 def claim_account_extract(acc_id: int, trigger: str = "manual", link_type: str = "pix") -> bool:
     """原子占用账号提链任务；已有未超时任务时返回 False。"""
     with _LOCK:
@@ -1409,6 +1434,7 @@ def list_account_plan_check_statuses(
     fields = (
         "id", "email", "archived",
         "plan_type", "current_plan_type", "plus_trial_eligible",
+        "gcash_eligible", "gcash_check_ok", "gcash_checked_at", "gcash_error",
         "plan_check_status", "plan_check_ok", "plan_check_error",
         "plan_check_trigger", "plan_check_queued_at", "plan_check_started_at",
         "plan_check_completed_at", "plan_checked_at", "plan_last_success_at",
@@ -1477,6 +1503,10 @@ def list_account_plan_check_statuses(
                     "current_plan_type": row.get("current_plan_type"),
                     "plan_type": row.get("plan_type"),
                     "plus_trial_eligible": row.get("plus_trial_eligible"),
+                    "gcash_eligible": row.get("gcash_eligible"),
+                    "gcash_check_ok": row.get("gcash_check_ok"),
+                    "gcash_checked_at": row.get("gcash_checked_at"),
+                    "gcash_error": row.get("gcash_error"),
                     "extract_link_status": row.get("extract_link_status"),
                     "codex_status": row.get("codex_status"),
                     "codex_agent_status": row.get("codex_agent_status"),
