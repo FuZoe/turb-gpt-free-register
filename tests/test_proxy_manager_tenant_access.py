@@ -60,3 +60,26 @@ def test_unlisted_tenant_cannot_access_shared_proxy_manager(monkeypatch):
     assert client.post(
         "/api/proxy-manager/registration-route", headers=headers, json={}
     ).status_code == 403
+
+
+def test_friend_tenant_can_read_and_modify_shared_config(monkeypatch):
+    app = _app(monkeypatch)
+    headers = {"X-Auth-Code": "friend-code"}
+    with (
+        patch("webui.config_editor.get_config", return_value=[]),
+        patch("webui.config_editor.update_config", return_value={"updated": ["X"], "ignored": []}),
+        patch("config.reload_all"),
+    ):
+        client = app.test_client()
+        assert client.get("/api/config", headers=headers).status_code == 200
+        assert client.post(
+            "/api/config", headers=headers, json={"updates": {"X": "1"}}
+        ).status_code == 200
+
+
+def test_unlisted_tenant_cannot_access_shared_config(monkeypatch):
+    app = _app(monkeypatch)
+    headers = {"X-Auth-Code": "other-code"}
+    client = app.test_client()
+    assert client.get("/api/config", headers=headers).status_code == 403
+    assert client.post("/api/config", headers=headers, json={"X": "1"}).status_code == 403

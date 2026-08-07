@@ -32,7 +32,7 @@ from core import (
     plan_check_service,
     twofa_task_service,
 )
-from webui.auth import can_manage_shared_proxies, configured_tenants, init_auth, register_auth_routes
+from webui.auth import can_manage_config, can_manage_shared_proxies, configured_tenants, init_auth, register_auth_routes
 from core import registration_service as svc
 from core.tenant_context import current_tenant, tenant_scope
 from webui import config_editor
@@ -2733,13 +2733,15 @@ def create_app(auth_code: str | None = None) -> Flask:
     # ----------------------------------------------------------
     @app.get("/api/config")
     def api_config_get():
-        if current_tenant() != "default":
-            return jsonify({"ok": False, "error": "租户账号仅使用管理员共享配置"}), 403
+        if not can_manage_config(current_tenant()):
+            return jsonify({"ok": False, "error": "租户账号不能读取共享配置"}), 403
         return jsonify(config_editor.get_config())
 
     @app.post("/api/cloudmail/gen-token")
     def api_cloudmail_gen_token():
         """手动生成 CloudMail Authorization Token，并把本次填写的 CloudMail 配置一并写入 .env。"""
+        if not can_manage_config(current_tenant()):
+            return jsonify({"ok": False, "error": "租户账号不能修改共享配置"}), 403
         data = request.get_json(silent=True) or {}
         try:
             from core.cloudmail_client import gen_token
@@ -2785,6 +2787,8 @@ def create_app(auth_code: str | None = None) -> Flask:
     @app.post("/api/cloudmail/domains")
     def api_cloudmail_domains():
         """从 CloudMail 平台获取域名列表，并可写入 .env 作为本地缓存。"""
+        if not can_manage_config(current_tenant()):
+            return jsonify({"ok": False, "error": "租户账号不能修改共享配置"}), 403
         data = request.get_json(silent=True) or {}
         try:
             from core.cloudmail_client import fetch_domains
@@ -2828,8 +2832,8 @@ def create_app(auth_code: str | None = None) -> Flask:
 
     @app.post("/api/config")
     def api_config_set():
-        if current_tenant() != "default":
-            return jsonify({"ok": False, "error": "租户账号仅使用管理员共享配置"}), 403
+        if not can_manage_config(current_tenant()):
+            return jsonify({"ok": False, "error": "租户账号不能修改共享配置"}), 403
         data = request.get_json(silent=True) or {}
         updates = data.get("updates") if isinstance(data.get("updates"), dict) else data
         if not isinstance(updates, dict) or not updates:

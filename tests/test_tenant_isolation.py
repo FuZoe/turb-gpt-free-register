@@ -3,7 +3,7 @@ from flask import Flask, jsonify
 from core import db
 from core import registration_service as registration_svc
 from core.tenant_context import current_tenant, tenant_scope
-from webui.auth import can_manage_shared_proxies, init_auth, register_auth_routes
+from webui.auth import can_manage_config, can_manage_shared_proxies, init_auth, register_auth_routes
 
 
 def test_json_storage_is_isolated_by_tenant(tmp_path, monkeypatch):
@@ -73,6 +73,20 @@ def test_shared_proxy_allowlist_can_be_overridden(monkeypatch):
     assert can_manage_shared_proxies("friend-a") is True
     assert can_manage_shared_proxies("friend-b") is True
     assert can_manage_shared_proxies("tenant2") is False
+
+
+def test_friend_tenant_can_manage_shared_config_by_default(monkeypatch):
+    monkeypatch.delenv("WEBUI_CONFIG_TENANTS", raising=False)
+    assert can_manage_config("default") is True
+    assert can_manage_config("tenant2") is True
+    assert can_manage_config("team-a") is False
+
+
+def test_shared_config_allowlist_can_be_overridden(monkeypatch):
+    monkeypatch.setenv("WEBUI_CONFIG_TENANTS", "friend-a,friend-b")
+    assert can_manage_config("friend-a") is True
+    assert can_manage_config("friend-b") is True
+    assert can_manage_config("tenant2") is False
 
 
 
