@@ -113,7 +113,8 @@ def _run_plan_check(
         if result.get("ok") and str(result.get("current_plan_type") or "").lower() == "free":
             gcash_result = check_gcash_zero_trial(
                 access_token,
-                proxy=proxy,
+                # 原始 Gcash curl 是直连；None 会被 BrowserSession 随机替换成代理池。
+                proxy=proxy if proxy is not None else "",
                 timeout=12.0,
             )
             db.update_account_gcash_check(acc_id=account_id, result=gcash_result)
