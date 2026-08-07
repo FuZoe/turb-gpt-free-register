@@ -27,6 +27,8 @@ _LEGACY_DATA_DIR = _PROJECT_ROOT / "data"
 _LOG_DIR = _PROJECT_ROOT / "注册日志"
 _PLAN_CHECK_STALE_SECONDS = 120
 _PLAN_CHECK_QUEUE_STALE_SECONDS = 1800
+_GCASH_CHECK_STALE_SECONDS = 120
+_GCASH_CHECK_QUEUE_STALE_SECONDS = 1800
 _TWOFA_TASK_STALE_SECONDS = 900
 _TWOFA_TASK_QUEUE_STALE_SECONDS = 3600
 _PASSWORD_TASK_STALE_SECONDS = 900
@@ -564,6 +566,20 @@ def _decorate_account(row: dict) -> dict:
             out["plan_check_status"] = "failed"
             out["plan_check_error"] = "上次套餐查询状态异常，可重新查询"
             out["plan_check_stale"] = True
+    gcash_status = out.get("gcash_check_status")
+    if gcash_status in {"queued", "running"}:
+        try:
+            stamp_key = "gcash_check_queued_at" if gcash_status == "queued" else "gcash_check_started_at"
+            stale_after = _GCASH_CHECK_QUEUE_STALE_SECONDS if gcash_status == "queued" else _GCASH_CHECK_STALE_SECONDS
+            started_at = datetime.fromisoformat(str(out.get(stamp_key) or ""))
+            if (datetime.now() - started_at).total_seconds() >= stale_after:
+                out["gcash_check_status"] = "failed"
+                out["gcash_check_ok"] = False
+                out["gcash_error"] = "Gcash 检测超时，将在服务启动后自动重试"
+        except (TypeError, ValueError):
+            out["gcash_check_status"] = "failed"
+            out["gcash_check_ok"] = False
+            out["gcash_error"] = "Gcash 检测状态异常，将在服务启动后自动重试"
     out["copy_line"] = _account_line(out)
     return out
 
@@ -1268,8 +1284,10 @@ def update_account_gcash_check(acc_id: int | None = None, email: str | None = No
         if row is None:
             return False
 
+        row["gcash_check_status"] = "success" if result.get("ok") else "failed"
         row["gcash_check_ok"] = bool(result.get("ok"))
         row["gcash_checked_at"] = result.get("gcash_checked_at") or _now()
+        row["gcash_check_completed_at"] = _now()
         row["gcash_http_status"] = result.get("gcash_http_status")
         row["gcash_error"] = result.get("gcash_error") or None
         if result.get("gcash_eligible") is not None:
@@ -1277,6 +1295,88 @@ def update_account_gcash_check(acc_id: int | None = None, email: str | None = No
         row["updated_at"] = _now()
         _save_accounts(accounts)
         return True
+
+
+def claim_account_gcash_check(acc_id: int) -> bool:
+    """原子占用 Gcash 检测；已有未超时检测时返回 False。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None:
+            return False
+        status = row.get("gcash_check_status")
+        if status in {"queued", "running"}:
+            try:
+                stamp_key = "gcash_check_queued_at" if status == "queued" else "gcash_check_started_at"
+                stale_after = _GCASH_CHECK_QUEUE_STALE_SECONDS if status == "queued" else _GCASH_CHECK_STALE_SECONDS
+                started_at = datetime.fromisoformat(str(row.get(stamp_key) or ""))
+                if (datetime.now() - started_at).total_seconds() < stale_after:
+                    return False
+            except (TypeError, ValueError):
+                pass
+        now = _now()
+        row.update({
+            "gcash_check_status": "queued",
+            "gcash_check_queued_at": now,
+            "gcash_check_started_at": None,
+            "gcash_check_completed_at": None,
+            "gcash_error": None,
+            "updated_at": now,
+        })
+        _save_accounts(accounts)
+        return True
+
+
+def mark_account_gcash_check_running(acc_id: int) -> bool:
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None or row.get("gcash_check_status") not in {"queued", "running"}:
+            return False
+        row["gcash_check_status"] = "running"
+        row["gcash_check_started_at"] = _now()
+        row["updated_at"] = _now()
+        _save_accounts(accounts)
+        return True
+
+
+def recover_interrupted_gcash_checks() -> int:
+    """服务启动时恢复上一进程残留的 Gcash 排队状态。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        recovered = 0
+        now = _now()
+        for row in accounts:
+            if row.get("gcash_check_status") not in {"queued", "running"}:
+                continue
+            row.update({
+                "gcash_check_status": "failed",
+                "gcash_check_ok": False,
+                "gcash_check_completed_at": now,
+                "gcash_error": "WebUI 重启导致 Gcash 检测中断，将自动重试",
+                "updated_at": now,
+            })
+            recovered += 1
+        if recovered:
+            _save_accounts(accounts)
+        return recovered
+
+
+def list_unchecked_gcash_free_accounts(limit: int = 500) -> list[dict]:
+    """返回已有套餐结果为 free、但尚未提交 Gcash 检测的账号。"""
+    with _LOCK:
+        rows = []
+        for row in _load_accounts():
+            if bool(row.get("archived")):
+                continue
+            plan = str(row.get("current_plan_type") or row.get("plan_type") or "").strip().lower()
+            if plan != "free" or row.get("gcash_checked_at"):
+                continue
+            if not str(row.get("access_token") or "").strip():
+                continue
+            rows.append(dict(row))
+        rows.sort(key=lambda r: int(r.get("id") or 0))
+        return rows[:max(1, int(limit or 1))]
 
 
 def claim_account_extract(acc_id: int, trigger: str = "manual", link_type: str = "pix") -> bool:
@@ -1434,7 +1534,7 @@ def list_account_plan_check_statuses(
     fields = (
         "id", "email", "archived",
         "plan_type", "current_plan_type", "plus_trial_eligible",
-        "gcash_eligible", "gcash_check_ok", "gcash_checked_at", "gcash_error",
+        "gcash_eligible", "gcash_check_status", "gcash_check_ok", "gcash_checked_at", "gcash_error",
         "plan_check_status", "plan_check_ok", "plan_check_error",
         "plan_check_trigger", "plan_check_queued_at", "plan_check_started_at",
         "plan_check_completed_at", "plan_checked_at", "plan_last_success_at",
@@ -1504,6 +1604,7 @@ def list_account_plan_check_statuses(
                     "plan_type": row.get("plan_type"),
                     "plus_trial_eligible": row.get("plus_trial_eligible"),
                     "gcash_eligible": row.get("gcash_eligible"),
+                    "gcash_check_status": row.get("gcash_check_status"),
                     "gcash_check_ok": row.get("gcash_check_ok"),
                     "gcash_checked_at": row.get("gcash_checked_at"),
                     "gcash_error": row.get("gcash_error"),

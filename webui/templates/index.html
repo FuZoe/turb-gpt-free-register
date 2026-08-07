@@ -1929,6 +1929,9 @@ function _gcashPlanPill(r) {
   const checkedAt = r.gcash_checked_at || '';
   const error = r.gcash_error || '';
   const title = [checkedAt ? `检测: ${checkedAt}` : '', error].filter(Boolean).join('；');
+  if (['queued', 'running'].includes(r.gcash_check_status)) {
+    return '<span class="pill status-running" title="历史账号正在后台自动检测 Gcash 资格">Gcash：检测中</span>';
+  }
   if (!checkedAt) return '<span class="pill status-running" title="尚未执行 Gcash 检测">Gcash：未检测</span>';
   if (r.gcash_check_ok === false) return `<span class="pill status-failed" title="${esc(title)}">Gcash：失败</span>`;
   if (r.gcash_eligible === true) return `<span class="pill status-success" title="${esc(title)}">Gcash：可用</span>`;

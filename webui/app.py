@@ -137,6 +137,7 @@ def _compact_account_for_list(row: dict) -> dict:
         out["plan_check_ok"] = row.get("plan_check_ok")
 
     # Gcash 零元试用资格
+    out["gcash_check_status"] = row.get("gcash_check_status")
     out["gcash_eligible"] = row.get("gcash_eligible")
     out["gcash_check_ok"] = row.get("gcash_check_ok")
     out["gcash_checked_at"] = row.get("gcash_checked_at")
@@ -286,13 +287,22 @@ def create_app(auth_code: str | None = None) -> Flask:
         with tenant_scope(tenant_id):
             recovered_jobs = svc.recover_interrupted_jobs()
             recovered_plan_checks = db.recover_interrupted_plan_checks()
+            recovered_gcash_checks = db.recover_interrupted_gcash_checks()
             recovered_extract_links = db.recover_interrupted_extract_links()
             recovered_codex_agents = db.recover_interrupted_codex_agents()
             recovered_twofa_tasks = db.recover_interrupted_twofa_tasks()
             recovered_password_tasks = db.recover_interrupted_password_tasks()
-            recovered_total = recovered_jobs + recovered_plan_checks + recovered_extract_links + recovered_codex_agents + recovered_twofa_tasks + recovered_password_tasks
+            recovered_total = recovered_jobs + recovered_plan_checks + recovered_gcash_checks + recovered_extract_links + recovered_codex_agents + recovered_twofa_tasks + recovered_password_tasks
             if recovered_total:
                 logger.warning("租户 %s 启动时已恢复 %s 个中断状态", tenant_id, recovered_total)
+            gcash_backfill = plan_check_service.enqueue_missing_gcash_checks()
+            if gcash_backfill.get("accepted"):
+                logger.info(
+                    "租户 %s 已自动补检 %s/%s 个历史 free 账号的 Gcash 资格",
+                    tenant_id,
+                    gcash_backfill["accepted"],
+                    gcash_backfill["candidates"],
+                )
 
     # ----------------------------------------------------------
     # 页面
