@@ -240,7 +240,7 @@ def _job_status_counts(rows: list[dict]) -> dict:
     return counts
 
 def create_app(auth_code: str | None = None) -> Flask:
-    app = Flask(__name__, template_folder="templates")
+    app = Flask(__name__, template_folder="templates", static_folder="static")
     _prepared_downloads: dict[str, dict] = {}
 
     def _put_prepared_download(content: bytes, filename: str, mimetype: str = "application/zip") -> str:

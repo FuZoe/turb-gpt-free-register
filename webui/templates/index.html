@@ -443,6 +443,7 @@
     }
     .roxy-invite-link:hover { background: #e0ebff; }
   </style>
+  <link rel="stylesheet" href="{{ url_for('static', filename='console-ui.css', v='20260807-ui1') }}">
 </head>
 <body>
 <header>
@@ -2076,11 +2077,11 @@ function renderAccounts() {
       <td>${_codexCell(r)}</td>
       <td class="actions actions-cell">
         <div class="account-row-actions">
-          <div class="account-action-group"><button class="primary" data-account-copy-secret="access_token" data-account-id="${esc(r.id)}" ${r.has_access_token ? '' : 'disabled'}>复制AT</button> <button class="good" data-account-copy-secret="session" data-account-id="${esc(r.id)}" ${r.has_access_token ? '' : 'disabled'} title="复制 /api/auth/session 完整内容">复制Session</button> <button class="good" data-account-copy-secret="copy_line" data-account-id="${esc(r.id)}">复制整行</button>${r.has_registration_password ? ` <button class="good" data-account-copy-secret="credentials_line" data-account-id="${esc(r.id)}" title="复制 邮箱----ChatGPT密码----TOTP">复制密码2FA</button>` : ''}</div>
-          <div class="account-action-group">${_codexAgentCell(r)}</div>
-          <div class="account-action-group"><button data-account-note="${esc(r.id)}" title="设置/清空该账号备注">备注</button> ${_planAction(r)} ${_extractLinkAction(r)}</div>
-          <div class="account-action-group">${_codexAction(r)} <button data-codex-log="${esc(r.email)}" title="查看该账号最近一次 Codex 补跑日志">补跑日志</button></div>
-          <div class="account-action-group danger-zone"><button data-account-archive="${esc(r.id)}" data-archived="${r.archived ? '0' : '1'}" title="${r.archived ? '恢复到默认账号列表' : '归档后默认账号列表不再显示'}">${r.archived ? '恢复' : '归档'}</button> <button class="danger" data-account-delete="${esc(r.id)}" data-email="${esc(r.email)}">删除</button></div>
+          <div class="account-action-group" data-action-group="凭据"><button class="primary" data-account-copy-secret="access_token" data-account-id="${esc(r.id)}" ${r.has_access_token ? '' : 'disabled'}>复制AT</button> <button class="good" data-account-copy-secret="session" data-account-id="${esc(r.id)}" ${r.has_access_token ? '' : 'disabled'} title="复制 /api/auth/session 完整内容">复制Session</button> <button class="good" data-account-copy-secret="copy_line" data-account-id="${esc(r.id)}">复制整行</button>${r.has_registration_password ? ` <button class="good" data-account-copy-secret="credentials_line" data-account-id="${esc(r.id)}" title="复制 邮箱----ChatGPT密码----TOTP">复制密码2FA</button>` : ''}</div>
+          <div class="account-action-group" data-action-group="Agent">${_codexAgentCell(r)}</div>
+          <div class="account-action-group" data-action-group="账号"><button data-account-note="${esc(r.id)}" title="设置/清空该账号备注">备注</button> ${_planAction(r)} ${_extractLinkAction(r)}</div>
+          <div class="account-action-group" data-action-group="Codex">${_codexAction(r)} <button data-codex-log="${esc(r.email)}" title="查看该账号最近一次 Codex 补跑日志">补跑日志</button></div>
+          <div class="account-action-group danger-zone" data-action-group="危险操作"><button data-account-archive="${esc(r.id)}" data-archived="${r.archived ? '0' : '1'}" title="${r.archived ? '恢复到默认账号列表' : '归档后默认账号列表不再显示'}">${r.archived ? '恢复' : '归档'}</button> <button class="danger" data-account-delete="${esc(r.id)}" data-email="${esc(r.email)}">删除</button></div>
         </div>
       </td>
     </tr>`).join('') || '<tr><td colspan="8" class="muted">暂无账号</td></tr>';

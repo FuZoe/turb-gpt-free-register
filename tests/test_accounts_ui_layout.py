@@ -125,3 +125,26 @@ def test_each_page_has_dedicated_flask_route():
     # / also returns 200
     r = app.get("/")
     assert r.status_code == 200
+
+
+def test_console_ui_module_keeps_account_actions_grouped_and_available():
+    text = TEMPLATE.read_text(encoding="utf-8")
+    css = (TEMPLATE.parent.parent / "static" / "console-ui.css").read_text(encoding="utf-8")
+
+    assert "console-ui.css" in text
+    for label in ("凭据", "Agent", "账号", "Codex", "危险操作"):
+        assert f'data-action-group="{label}"' in text
+    for action in (
+        "data-account-copy-secret=\"access_token\"",
+        "data-account-copy-secret=\"session\"",
+        "data-account-copy-secret=\"copy_line\"",
+        "data-account-note=",
+        "data-plan-check=",
+        "data-extract-link=",
+        "data-codex-log=",
+        "data-account-archive=",
+        "data-account-delete=",
+    ):
+        assert action in text
+    assert "--ui-action-height: 31px" in css
+    assert "grid-template-columns: repeat(2, minmax(260px, 1fr))" in css
