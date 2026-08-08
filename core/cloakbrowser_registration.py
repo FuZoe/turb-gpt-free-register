@@ -14,7 +14,7 @@ from core.account_export import save_account_data
 from core.cloakbrowser_driver import build_cloak_driver
 from core.email_provider import wait_for_otp, resolve_email_source
 from core.humanize import delay as human_delay
-from core.tenant_context import tenant_path
+from core.tenant_context import current_tenant, tenant_path, tenant_scope
 
 # 复用 Roxy 注册流程里已维护好的页面操作函数。
 from core.roxy_registration import (  # noqa: F401
@@ -22,9 +22,29 @@ from core.roxy_registration import (  # noqa: F401
     _open_signup_password_from_otp,
     _clear_otp_inputs, _type_otp, _click_continue, _wait_after_email_otp_submit,
     _click_resend_email_otp, _complete_profile_page, _fetch_chatgpt_session, _check_manual_stop,
+    is_cloudflare_challenge_error,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _is_proxy_navigation_failure(error: object) -> bool:
+    text = str(error or "").lower()
+    network_markers = (
+        "err_connection_closed",
+        "err_connection_reset",
+        "err_connection_timed_out",
+        "err_proxy_connection_failed",
+        "err_socks_connection_failed",
+        "ssl_error_syscall",
+        "tls connect error",
+        "curl: (35)",
+        "curl: (52)",
+        "curl: (56)",
+    )
+    if any(marker in text for marker in network_markers):
+        return True
+    return "page.goto" in text and "timeout 30000ms exceeded" in text
 
 
 def _capture_cloak_failure_diagnostics(driver, batch_dir: Path | None = None) -> None:
@@ -171,7 +191,7 @@ def _run_cloak_registration_impl(email: str, name: str, birthday: str, proxy: st
                     "message": f"{type(exc).__name__}: {str(exc)[:220]}",
                 }
                 logger.error("[Cloak注册][2FA] 设置失败：%s", twofa_result["message"], exc_info=True)
-                raise RuntimeError(f"Cloak 2FA 设置失败：{twofa_result['message']}") from exc
+                logger.warning("[Cloak注册][2FA] 账号注册已完成，保留账号并记录 2FA 失败，后续可单独补设")
 
         codex_result = {
             "status": "skipped",
@@ -205,6 +225,7 @@ def _run_cloak_registration_impl(email: str, name: str, birthday: str, proxy: st
             proxy_used=((opened.raw or {}).get("proxy") if opened else None) or proxy or None,
             batch_dir=batch_dir,
             extra={
+                "session": session_info,
                 "user": session_info.get("user"),
                 "account": session_info.get("account"),
                 "expires": session_info.get("expires"),
@@ -216,7 +237,7 @@ def _run_cloak_registration_impl(email: str, name: str, birthday: str, proxy: st
         )
         codex_ok = codex_result.get("ok") or codex_result.get("status") == "skipped"
         twofa_ok = bool(twofa_result.get("ok"))
-        overall_ok = bool(codex_ok and twofa_ok)
+        overall_ok = bool(codex_ok)
         errors = []
         if not twofa_ok:
             errors.append(f"2FA 未完成: {twofa_result.get('message')}")
@@ -231,10 +252,21 @@ def _run_cloak_registration_impl(email: str, name: str, birthday: str, proxy: st
             "totp_secret": totp_secret,
             "twofa": twofa_result,
             "codex": codex_result,
+            "warning": "; ".join(errors) if errors else None,
             "error": None if overall_ok else "; ".join(errors),
         }
     except Exception as exc:
         logger.error("[Cloak注册] 失败：%s: %s", type(exc).__name__, exc)
+        if is_cloudflare_challenge_error(exc) or _is_proxy_navigation_failure(exc):
+            used_proxy = ((opened.raw or {}).get("proxy") if opened else None) or proxy or None
+            try:
+                from config.proxy import mark_proxy_temporarily_bad
+
+                mark_proxy_temporarily_bad(used_proxy, ttl_seconds=900)
+                reason = "Cloudflare" if is_cloudflare_challenge_error(exc) else "导航超时"
+                logger.warning("[Cloak注册] %s线路已冷却 15 分钟：%s", reason, used_proxy)
+            except Exception:
+                logger.debug("[Cloak注册] 标记 Cloudflare 线路冷却失败", exc_info=True)
         logger.debug("[Cloak注册] 失败详情", exc_info=True)
         _capture_cloak_failure_diagnostics(driver, batch_dir=batch_dir)
         try:
@@ -261,17 +293,19 @@ def run_cloak_registration(email: str, name: str, birthday: str, proxy: str = No
     result_box: dict = {}
     error_box: dict = {}
     parent_thread_name = threading.current_thread().name
+    tenant_id = current_tenant()
 
     def _target() -> None:
         try:
-            result_box["value"] = _run_cloak_registration_impl(
-                email=email,
-                name=name,
-                birthday=birthday,
-                proxy=proxy,
-                otp_code=otp_code,
-                batch_dir=batch_dir,
-            )
+            with tenant_scope(tenant_id):
+                result_box["value"] = _run_cloak_registration_impl(
+                    email=email,
+                    name=name,
+                    birthday=birthday,
+                    proxy=proxy,
+                    otp_code=otp_code,
+                    batch_dir=batch_dir,
+                )
         except BaseException as exc:  # noqa: BLE001 - 跨线程原样回传
             error_box["error"] = exc
 

@@ -1,0 +1,191 @@
+/* Console UI module: reusable action controls and dense operational tables. */
+:root {
+  --ui-control-height: 38px;
+  --ui-action-height: 31px;
+  --ui-radius: 7px;
+  --ui-subtle: #667085;
+  --ui-border: #d9e1ea;
+  --ui-hover: #f0f5ff;
+  --ui-blue: #175cd3;
+  --ui-red: #b42318;
+}
+
+/* Shared controls: all commands keep a stable, finger-sized target. */
+button, .btn, .pager-bar button, .config-tabs button, .config-subtabs button {
+  min-height: var(--ui-control-height);
+  border-radius: var(--ui-radius);
+  font-size: 13px;
+  letter-spacing: 0;
+}
+
+button:focus-visible, .btn:focus-visible, input:focus-visible,
+select:focus-visible, textarea:focus-visible {
+  outline: 3px solid rgba(23, 92, 211, .24);
+  outline-offset: 2px;
+}
+
+.toolbar, .accounts-toolbar { gap: 16px; }
+.buttons, .accounts-actionbar { gap: 10px; }
+
+.btn-group {
+  border: 1px solid var(--ui-border);
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 8px;
+  gap: 7px;
+}
+
+.btn-group-title {
+  color: var(--ui-subtle);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.accounts-actionbar { align-items: stretch; }
+.accounts-toolbar .btn { min-height: 36px; padding-inline: 13px; font-size: 13px; }
+
+/* Account rows intentionally use a smaller command size, but no tiny chips. */
+.accounts-table { font-size: 13px; }
+.accounts-table th, .accounts-table td { padding: 10px 9px; }
+.accounts-table .main-cell { font-size: 13px; line-height: 1.4; }
+.accounts-table .sub-cell, .accounts-table .mono { font-size: 12px; }
+.accounts-table .col-actions { width: 650px; }
+.accounts-table .actions { gap: 7px; }
+.accounts-table .actions button, .account-secret-cell button, .agent-token-cell button,
+.accounts-table .extract-link-btn, .accounts-table .agent-token-cell button {
+  min-height: var(--ui-action-height);
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.15;
+}
+
+.account-row-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(260px, 1fr));
+  gap: 8px;
+  align-items: stretch;
+}
+
+.account-action-group {
+  position: relative;
+  display: flex;
+  align-items: center;
+  align-content: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 50px;
+  padding: 21px 7px 7px;
+  border: 1px solid var(--ui-border);
+  border-radius: 7px;
+  background: #fbfcfe;
+}
+
+.account-action-group::before {
+  position: absolute;
+  top: 6px;
+  left: 8px;
+  color: var(--ui-subtle);
+  content: attr(data-action-group);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.account-action-group[data-action-group="凭据"] { background: #f7fbff; border-color: #c7ddf7; }
+.account-action-group[data-action-group="Agent"] { background: #f6fcf8; border-color: #c9ead7; }
+.account-action-group[data-action-group="账号"] { background: #fffdf6; border-color: #efdfae; }
+.account-action-group[data-action-group="Codex"] { background: #faf8ff; border-color: #ded2f7; }
+.account-action-group.danger-zone { background: #fff8f8; border-color: #f2c9c6; }
+.account-action-group.danger-zone::before { color: var(--ui-red); }
+
+.account-action-group button { box-shadow: none; }
+.account-action-group button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: #8caee8;
+  background: var(--ui-hover);
+  box-shadow: 0 3px 8px rgba(16, 24, 40, .10);
+}
+.account-action-group button.primary { background: var(--ui-blue); border-color: var(--ui-blue); color: #fff; }
+.account-action-group button.good { background: #eaf8f0; border-color: #9ed8b7; color: #05603a; }
+.account-action-group button.danger { background: #fff; border-color: #efb7b3; color: var(--ui-red); }
+.account-secret-cell, .agent-token-cell, .extract-link-cell { gap: 7px; }
+.runtime-resource { min-width: 232px; padding: 12px 14px; }
+
+/* The account table becomes cards based on its own available width, not viewport width. */
+#tab-accounts > .card { container: account-list / inline-size; }
+
+@container account-list (max-width: 1700px) {
+  .accounts-toolbar .search { min-width: min(100%, 280px); }
+  .accounts-table colgroup,
+  .accounts-table thead { display: none; }
+  .accounts-table,
+  .accounts-table tbody { display: block; width: 100%; table-layout: auto; }
+  .accounts-table tr {
+    display: grid;
+    grid-template-columns: 38px minmax(180px, 1fr) minmax(175px, .85fr) minmax(250px, 1.55fr);
+    gap: 8px 14px;
+    width: auto;
+    margin: 10px;
+    padding: 12px;
+    border: 1px solid var(--ui-border);
+    border-radius: 8px;
+    background: #fff;
+  }
+  .accounts-table td {
+    display: block;
+    width: auto !important;
+    min-width: 0;
+    overflow: visible !important;
+    padding: 0;
+    border: 0;
+    white-space: normal;
+    text-overflow: clip;
+  }
+  .accounts-table tbody tr:hover td { background: transparent; }
+  .accounts-table td:nth-child(1) { grid-column: 1; grid-row: 1 / span 3; padding-top: 3px; }
+  .accounts-table td:nth-child(2) { grid-column: 2; color: var(--ui-subtle); font-size: 12px; font-weight: 800; }
+  .accounts-table td:nth-child(3) { grid-column: 2; overflow-wrap: anywhere; }
+  .accounts-table td:nth-child(4) { grid-column: 3; }
+  .accounts-table td:nth-child(5) { grid-column: 3; }
+  .accounts-table td:nth-child(6) { grid-column: 4; }
+  .accounts-table td:nth-child(7) { grid-column: 4; }
+  .accounts-table td:nth-child(8) { grid-column: 1 / -1; padding-top: 8px; border-top: 1px solid #e7edf3; }
+  .accounts-table td:nth-child(4)::before,
+  .accounts-table td:nth-child(5)::before,
+  .accounts-table td:nth-child(6)::before,
+  .accounts-table td:nth-child(7)::before {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--ui-subtle);
+    font-size: 11px;
+    font-weight: 800;
+  }
+  .accounts-table td:nth-child(4)::before { content: "套餐"; }
+  .accounts-table td:nth-child(5)::before { content: "备注"; }
+  .accounts-table td:nth-child(6)::before { content: "密码 / 2FA"; }
+  .accounts-table td:nth-child(7)::before { content: "Codex"; }
+  .account-row-actions { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+  .account-action-group { min-width: 0; }
+  .table-wrap { overflow: visible; }
+}
+
+@container account-list (max-width: 860px) {
+  .accounts-table tr { grid-template-columns: 34px minmax(0, 1fr); }
+  .accounts-table td:nth-child(1) { grid-column: 1; grid-row: 1 / span 5; }
+  .accounts-table td:nth-child(2),
+  .accounts-table td:nth-child(3),
+  .accounts-table td:nth-child(4),
+  .accounts-table td:nth-child(5),
+  .accounts-table td:nth-child(6),
+  .accounts-table td:nth-child(7) { grid-column: 2; }
+  .account-row-actions { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 760px) {
+  :root { --ui-control-height: 42px; --ui-action-height: 36px; }
+  .accounts-toolbar .search { min-width: 100%; }
+  .btn-group { width: 100%; }
+  .account-row-actions { min-width: 0; }
+}

@@ -51,8 +51,14 @@
       padding: 10px 12px; border: 1px solid #cad5e2; border-radius: 10px;
       background: rgba(255,255,255,.96); box-shadow: 0 8px 24px rgba(15,23,42,.16);
       backdrop-filter: blur(8px); font-size: 12px; color: #344054;
+      touch-action: none; user-select: none; -webkit-user-select: none;
+      resize: both; overflow: hidden; min-width: 220px; min-height: 92px;
+      max-width: min(560px, calc(100vw - 24px)); max-height: min(420px, calc(100vh - 24px));
     }
-    .runtime-resource-head { display:flex; justify-content:space-between; align-items:center; gap:8px; font-weight:900; }
+    .runtime-resource-head { display:flex; justify-content:space-between; align-items:center; gap:8px; font-weight:900; cursor:grab; }
+    .runtime-resource.dragging .runtime-resource-head { cursor:grabbing; }
+    .runtime-resource.dragging { box-shadow: 0 14px 34px rgba(15,23,42,.28); }
+    .runtime-resource-head .runtime-resource-grip { color:#98a2b3; font-size:11px; font-weight:800; letter-spacing:1px; }
     .runtime-resource-value { color:#172033; font-family:ui-monospace,Consolas,monospace; }
     .runtime-resource-bar { height:7px; margin:7px 0 6px; overflow:hidden; border-radius:999px; background:#e8eef5; }
     .runtime-resource-bar i { display:block; width:0; height:100%; border-radius:inherit; background:#16803c; transition:width .3s ease,background .3s ease; }
@@ -95,6 +101,48 @@
       padding: 8px 12px; font: inherit; margin-top: 6px;
     }
     textarea { min-height: 120px; font-family: ui-monospace, Consolas, monospace; font-size: 12px; resize: vertical; }
+    .proxy-manager-grid { display: grid; gap: 14px; }
+    .proxy-pool-tabs { display: flex; gap: 8px; flex-wrap: wrap; }
+    .proxy-pool-tabs button {
+      min-height: 38px; padding: 0 14px; border: 1px solid var(--line); border-radius: 8px;
+      background: #fff; color: #475467; font-weight: 800; cursor: pointer;
+    }
+    .proxy-pool-tabs button.active { color: #1d4ed8; border-color: #8eb0f8; background: #eef4ff; }
+    .proxy-pool-tabs .config-count { margin-left: 5px; }
+    .proxy-editor-meta {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+      padding: 12px 14px; border: 1px solid #dbe6f2; border-radius: 9px; background: #f8fbff;
+    }
+    .registration-route-box {
+      display: grid; grid-template-columns: minmax(260px, 1fr) minmax(240px, 420px) auto;
+      gap: 12px; align-items: end; padding: 14px; border: 1px solid #c8d8ee;
+      border-radius: 10px; background: linear-gradient(180deg, #f8fbff, #f2f7ff);
+    }
+    .registration-route-box label { margin: 0; }
+    .registration-route-current { margin-top: 5px; color: #475467; font-size: 12px; }
+    @media (max-width: 800px) {
+      .registration-route-box { grid-template-columns: 1fr; }
+      .registration-route-box .btn { width: 100%; }
+    }
+    .proxy-editor-meta strong { display: block; margin-bottom: 3px; }
+    .proxy-editor-meta .route { color: #1d4ed8; font-weight: 800; }
+    #proxyEditor {
+      min-height: 52vh; max-height: 72vh; margin-top: 0; padding: 14px;
+      border-color: #bdcce0; line-height: 1.55; font-size: 13px; white-space: pre;
+    }
+    .proxy-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    .proxy-actions .buttons { justify-content: flex-end; }
+    .proxy-summary { display: flex; gap: 8px; flex-wrap: wrap; }
+    .proxy-summary .pill { min-width: auto; }
+    .proxy-test-table .col-index { width: 72px; }
+    .proxy-test-table .col-status { width: 100px; }
+    .proxy-test-table .col-delay { width: 120px; }
+    .proxy-test-table .col-proxy-name { width: 280px; }
+    @media (max-width: 700px) {
+      #proxyEditor { min-height: 58vh; font-size: 12px; }
+      .proxy-actions { align-items: stretch; }
+      .proxy-actions .buttons, .proxy-actions .buttons .btn { width: 100%; }
+    }
     .row { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; }
     .row > * { flex: 1; min-width: 160px; }
     .row label.fld { margin-bottom: 0; }
@@ -225,6 +273,7 @@
     }
     .accounts-toolbar .inline-num input[type="number"] { width: 56px; min-height: 26px; padding: 2px 6px; border-radius: 7px; }
     .accounts-toolbar .inline-num input[type="checkbox"] { margin: 0; }
+    .accounts-toolbar .inline-num select { width: auto; min-width: 88px; min-height: 26px; margin: 0; padding: 2px 28px 2px 8px; border-radius: 7px; }
     .accounts-table { font-size: 12px; }
     .accounts-table th, .accounts-table td { padding: 7px 8px; }
     .accounts-table .col-check { width: 34px; }
@@ -232,7 +281,7 @@
     .accounts-table .col-email { width: 250px; }
     .accounts-table .col-plan { width: 260px; }
     .accounts-table .col-note { width: 110px; }
-    .accounts-table .col-small { width: 130px; }
+    .accounts-table .col-small { width: 158px; }
     .accounts-table .col-status { width: 88px; }
     .accounts-table .col-actions { width: 570px; }
     .accounts-table .main-cell { font-size: 12px; }
@@ -272,8 +321,8 @@
       width: 100%; max-width: 100%; min-width: 0;
       max-height: 320px; overflow: auto; line-height: 1.5;
     }
-    #logPanel, #retryLogPanel, #qrPanel, #secretPanel, #agentTokenPanel { min-width: 0; max-width: 100%; overflow-x: hidden; }
-    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #qrPanel:not(.hidden), #secretPanel:not(.hidden), #agentTokenPanel:not(.hidden) {
+    #logPanel, #retryLogPanel, #qrPanel, #secretPanel, #agentTokenPanel, #autoTaskPanel, #extractLinkPanel { min-width: 0; max-width: 100%; overflow-x: hidden; }
+    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #qrPanel:not(.hidden), #secretPanel:not(.hidden), #agentTokenPanel:not(.hidden), #autoTaskPanel:not(.hidden), #extractLinkPanel:not(.hidden) {
       position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
       z-index: 1000; display: block; width: min(1100px, calc(100vw - 48px));
       max-height: min(760px, calc(100vh - 48px)); overflow: hidden;
@@ -283,8 +332,13 @@
     #qrPanel:not(.hidden) { width: min(520px, calc(100vw - 48px)); text-align: center; }
     #secretPanel:not(.hidden) { width: min(560px, calc(100vw - 48px)); }
     #agentTokenPanel:not(.hidden) { width: min(760px, calc(100vw - 48px)); }
-    #logPanel h3, #retryLogPanel h3, #qrPanel h3, #secretPanel h3, #agentTokenPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
-    #logPanel h3 .btn, #retryLogPanel h3 .btn, #qrPanel h3 .btn, #secretPanel h3 .btn, #agentTokenPanel h3 .btn { margin-left:auto; float:none !important; }
+    #autoTaskPanel:not(.hidden) { width: min(920px, calc(100vw - 32px)); max-height: min(820px, calc(100vh - 32px)); overflow:auto; }
+    #extractLinkPanel:not(.hidden) { width: min(620px, calc(100vw - 32px)); }
+    #logPanel h3, #retryLogPanel h3, #qrPanel h3, #secretPanel h3, #agentTokenPanel h3, #autoTaskPanel h3, #extractLinkPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+    #logPanel h3 .btn, #retryLogPanel h3 .btn, #qrPanel h3 .btn, #secretPanel h3 .btn, #agentTokenPanel h3 .btn, #autoTaskPanel h3 .btn, #extractLinkPanel h3 .btn { margin-left:auto; float:none !important; }
+    .extract-provider-options { display:grid; gap:8px; margin:12px 0; }
+    .extract-provider-option { display:flex; gap:9px; align-items:flex-start; padding:11px 12px; border:1px solid var(--line); border-radius:9px; cursor:pointer; }
+    .extract-provider-option input { width:auto; min-height:auto; margin-top:3px; }
     #logPanel .log, #retryLogPanel .log { max-height: calc(min(760px, calc(100vh - 48px)) - 74px); margin-top:0; }
     #qrPanel img { display:block; max-width:min(360px, calc(100vw - 96px)); max-height:420px; margin:12px auto; border:1px solid var(--line); border-radius:10px; background:#fff; }
     #qrPanel .qr-link { display:block; word-break:break-all; white-space:normal; font-size:12px; color:var(--muted); margin-top:8px; }
@@ -294,6 +348,19 @@
     .secret-value-row label { flex:1; margin:0; }
     .secret-value-row input { font-family:ui-monospace,Consolas,monospace; }
     #agentTokenValue { min-height:180px; max-height:360px; font-family:ui-monospace,Consolas,monospace; }
+    .auto-task-options { display:flex; gap:8px; flex-wrap:wrap; padding:10px 0 14px; border-bottom:1px solid var(--line); }
+    .auto-task-option { display:inline-flex; align-items:center; gap:7px; min-height:34px; padding:0 12px; border:1px solid var(--line); border-radius:6px; background:#fff; font-size:13px; font-weight:800; cursor:pointer; }
+    .auto-task-option:has(input:checked) { border-color:var(--blue); background:#eef4ff; color:#1d4ed8; }
+    .auto-task-option input { width:auto; min-height:auto; margin:0; }
+    .auto-task-toolbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:12px 0; }
+    .auto-task-toolbar .search { flex:1 1 300px; min-width:220px; }
+    .auto-task-toolbar .search input { margin:0; }
+    .auto-task-table { table-layout:fixed; min-width:620px; }
+    .auto-task-table .col-check { width:44px; }
+    .auto-task-table .col-id { width:70px; }
+    .auto-task-table .col-status { width:150px; }
+    .auto-task-table td { white-space:normal; overflow-wrap:anywhere; }
+    .auto-task-pager { display:flex; align-items:center; justify-content:flex-end; gap:8px; padding-top:12px; }
     .hidden { display: none !important; }
     #toast {
       position: fixed; right: 18px; bottom: 18px; padding: 10px 14px; border-radius: 8px;
@@ -376,6 +443,7 @@
     }
     .roxy-invite-link:hover { background: #e0ebff; }
   </style>
+  <link rel="stylesheet" href="{{ url_for('static', filename='console-ui.css', v='20260808-ui2') }}">
 </head>
 <body>
 <header>
@@ -404,9 +472,11 @@
     <button data-tab="accounts">账号</button>
     <button data-tab="codex">Codex 授权</button>
     <button data-tab="outlook">邮箱池</button>
+    <button data-tab="proxies">代理管理</button>
     <button data-tab="config">配置</button>
   </div>
 </nav>
+<script nonce="{{ '' if not tab else '' }}">window.__INITIAL_TAB = "{{ tab or '' }}";</script>
 
 <div class="runtime-resource" id="runtimeResource" title="systemd cgroup 实时用量；内存硬上限由 MemoryMax 控制">
   <div class="runtime-resource-head">
@@ -435,6 +505,15 @@
             <label class="fld">并发线程数
               <input id="regWorkers" type="number" min="1" max="16" value="3">
             </label>
+          </div>
+          <div>
+            <label class="fld">失败自动重试次数
+              <input id="regAutoRetries" type="number" min="0" max="10" value="3">
+              <span class="hint">0=关闭；1=失败后再试一次</span>
+            </label>
+          </div>
+          <div class="action-cell">
+            <button class="btn" id="btnSaveRegSettings">保存次数</button>
           </div>
           <div class="action-cell">
             <button class="btn primary" id="btnStart">开始注册</button>
@@ -491,6 +570,20 @@
             <label class="inline-num" title="只查询/显示已开通 Plus 的账号">
               <input id="showPlusAccountsOnly" type="checkbox" style="width:auto;min-height:auto;"> 已开通Plus
             </label>
+            <label class="inline-num">2FA
+              <select id="accountTwofaFilter" title="按 2FA 启用状态筛选账号">
+                <option value="">全部</option>
+                <option value="enabled">已启用</option>
+                <option value="disabled">未启用</option>
+              </select>
+            </label>
+            <label class="inline-num">密码
+              <select id="accountPasswordFilter" title="按登录密码保存状态筛选账号">
+                <option value="">全部</option>
+                <option value="present">有密码</option>
+                <option value="missing">无密码</option>
+              </select>
+            </label>
             <button class="btn" id="btnRefreshAccounts" title="重新加载当前筛选条件和当前页账号列表">刷新账号</button>
           </div>
         </div>
@@ -498,13 +591,17 @@
           <div class="btn-group">
             <span class="btn-group-title">套餐/提链</span>
             <button class="btn primary" id="btnCheckSelectedPlans" disabled title="查询选中账号当前套餐；free 账号会检查 Plus 试用资格">查套餐</button>
-            <button class="btn good" id="btnExtractSelectedLinks" disabled title="给选中的 free(可Plus试用) 账号批量提链，类型按配置 PIX/UPI/KAKAO_PAY/IDEAL">提链</button>
+            <button class="btn good" id="btnExtractSelectedLinks" disabled title="选择内置UPI或外部荷兰iDEAL渠道，为选中账号批量提链">提链</button>
           </div>
           <div class="btn-group">
             <span class="btn-group-title">Agent</span>
             <button class="btn good" id="btnGenerateSelectedAgent" disabled title="给选中的已注册账号批量生成 Codex Agent Token">生成</button>
             <button class="btn good" id="btnDownloadSelectedAgent" disabled title="下载选中账号已生成的 Codex Agent Token，打包 ZIP">下载</button>
             <button class="btn good" id="btnUploadSelectedAgentSub2" disabled title="把选中账号已生成的 Codex Agent Token 上传到 sub2api">上传sub2</button>
+          </div>
+          <div class="btn-group">
+            <span class="btn-group-title">自动任务</span>
+            <button class="btn good" id="btnOpenAutoTask" title="选择任务类型和待处理账号后统一加入队列">创建自动任务</button>
           </div>
           <div class="btn-group">
             <span class="btn-group-title">Codex</span>
@@ -539,7 +636,7 @@
       </div>
       <div class="pager-bar" id="pager-accounts"></div>
       <div class="body hidden" id="retryLogPanel">
-        <h3>补跑日志：<span id="retryLogEmail" style="font-size:13px;font-weight:400;color:var(--muted);"></span>
+        <h3><span id="retryLogTitle">补跑日志</span>：<span id="retryLogEmail" style="font-size:13px;font-weight:400;color:var(--muted);"></span>
           <button class="btn" id="btnCloseRetryLog" style="float:right;min-height:28px;">关闭</button>
         </h3>
         <div class="log" id="retryLogContent">加载中…</div>
@@ -630,6 +727,12 @@
               <option value="generic_api">通用 API 邮箱池</option>
               <option value="cloudflare_domain">域名邮箱池</option>
             </select>
+            <select id="poolStatus" style="flex:0 0 140px;margin-top:0;" title="按邮箱状态筛选">
+              <option value="">全部状态</option>
+              <option value="available">可用</option>
+              <option value="used">已用</option>
+              <option value="failed">失败</option>
+            </select>
             <input id="qOutlook" placeholder="搜索邮箱、状态…">
           </div>
         </div>
@@ -657,6 +760,61 @@
   </div>
 
   <!-- ============ 配置 ============ -->
+  <div id="tab-proxies" class="hidden">
+    <section class="card">
+      <div class="head">
+        <h2>代理管理</h2>
+        <p>管理 Mihomo 的真实上游代理。保存前会校验 URL 和完整配置，失败时自动恢复备份；注册机仍通过本地转发端口使用代理。</p>
+      </div>
+      <div class="body proxy-manager-grid">
+        <div id="proxyPoolTabs" class="proxy-pool-tabs"></div>
+        <div id="proxyManagerBanner" class="banner info">正在读取代理池...</div>
+        <div class="registration-route-box">
+          <div>
+            <strong>注册线路</strong>
+            <div class="hint">注册机只连接所选国家池的本地入口，Mihomo 在池内按 round-robin 轮询大量代理。</div>
+            <div id="registrationRouteCurrent" class="registration-route-current">正在读取当前线路...</div>
+          </div>
+          <label class="fld">选择国家代理池
+            <select id="registrationRouteSelect"></select>
+          </label>
+          <button class="btn primary" id="btnSaveRegistrationRoute">应用注册线路</button>
+        </div>
+        <div id="proxyPoolMeta" class="proxy-editor-meta"></div>
+        <textarea id="proxyEditor" spellcheck="false" autocomplete="off" placeholder="每行一个代理 URL，例如：socks5://user:password@host:port"></textarea>
+        <div class="proxy-actions">
+          <div class="proxy-summary">
+            <span class="pill status-pending" id="proxyLineCount">0 条</span>
+            <span class="muted" id="proxyDirtyHint">尚未修改</span>
+          </div>
+          <div class="buttons">
+            <button class="btn" id="btnReloadProxyPool">放弃修改并重新读取</button>
+            <button class="btn good" id="btnTestProxyPool">检测已保存代理</button>
+            <button class="btn primary" id="btnSaveProxyPool">保存并应用</button>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section class="card">
+      <div class="toolbar">
+        <div>
+          <h2>检测结果</h2>
+          <p class="muted" id="proxyTestSummary" style="font-size:12px;margin-top:4px;">尚未检测</p>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="proxy-test-table">
+          <colgroup>
+            <col class="col-index"><col class="col-proxy-name"><col class="col-status">
+            <col class="col-delay"><col>
+          </colgroup>
+          <thead><tr><th>#</th><th>代理名称</th><th>状态</th><th>延迟</th><th class="wrap">错误</th></tr></thead>
+          <tbody id="proxyTestBody"><tr><td colspan="5" class="muted">尚未检测</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
   <div id="tab-config" class="hidden">
     <section class="card">
       <div class="head"><h2>运行配置</h2><p>仅开放运行时安全的开关与数值。协议级常量（client_id / sentinel 版本）不在此处，避免误改废号。</p></div>
@@ -671,6 +829,53 @@
 </main>
 
 <div id="toast"></div>
+<div id="autoTaskPanel" class="body hidden">
+  <h3>创建自动任务 <button class="btn" id="btnCloseAutoTask">关闭</button></h3>
+  <div class="auto-task-options" role="radiogroup" aria-label="任务类型">
+    <label class="auto-task-option"><input type="radio" name="autoTaskMode" value="twofa" checked> 创建2FA</label>
+    <label class="auto-task-option"><input type="radio" name="autoTaskMode" value="password"> 创建密码</label>
+    <label class="auto-task-option"><input type="radio" name="autoTaskMode" value="codex"> 补跑Codex</label>
+  </div>
+  <div class="auto-task-toolbar">
+    <div class="search"><input id="qAutoTaskAccounts" placeholder="搜索候选账号"></div>
+    <span class="muted" id="autoTaskSelectedHint">已选 0</span>
+    <button class="btn" id="btnSelectAutoTaskPage">全选当前页</button>
+    <button class="btn primary" id="btnSubmitAutoTask" disabled>创建任务</button>
+  </div>
+  <div class="table-wrap">
+    <table class="auto-task-table">
+      <colgroup><col class="col-check"><col class="col-id"><col><col class="col-status"><col class="col-status"></colgroup>
+      <thead><tr><th><input type="checkbox" id="autoTaskSelectAll" title="全选/取消全选全部候选账号"></th><th>ID</th><th>邮箱</th><th>状态</th><th>日志</th></tr></thead>
+      <tbody id="autoTaskAccountsBody"><tr><td colspan="5" class="muted">加载中…</td></tr></tbody>
+    </table>
+  </div>
+  <div class="auto-task-pager">
+    <button class="btn" id="btnAutoTaskPrev">上一页</button>
+    <span class="muted" id="autoTaskPageInfo">第 1 / 1 页</span>
+    <button class="btn" id="btnAutoTaskNext">下一页</button>
+  </div>
+</div>
+<div id="extractLinkPanel" class="body hidden">
+  <h3>创建提链 <button class="btn" id="btnCloseExtractLink">关闭</button></h3>
+  <div class="muted" id="extractLinkTargetHint"></div>
+  <div class="banner warn" style="margin-top:10px;">所选提链服务会接收目标账号的 Access Token；外部荷兰iDEAL CDK只用于本次任务，不写入注册机配置。</div>
+  <div class="extract-provider-options" role="radiogroup" aria-label="提链渠道">
+    <label class="extract-provider-option">
+      <input type="radio" name="extractLinkProvider" value="builtin" checked>
+      <span><b>内置 UPI</b><br><span class="muted">使用注册机已经配置的内置UPI服务与CDK</span></span>
+    </label>
+    <label class="extract-provider-option">
+      <input type="radio" name="extractLinkProvider" value="external_ideal">
+      <span><b>外部荷兰 iDEAL</b><br><span class="muted">调用 ideal.169abc.xyz 的 iDEAL 接口；由当前用户提供自己的CDK</span></span>
+    </label>
+  </div>
+  <label class="fld hidden" id="externalIdealCdkField">外部荷兰 iDEAL CDK
+    <input id="externalIdealCdk" type="password" autocomplete="off" placeholder="请输入你自己的 iDEAL CDK">
+  </label>
+  <div class="buttons" style="justify-content:flex-end;margin-top:14px;">
+    <button class="btn primary" id="btnSubmitExtractLink">提交提链任务</button>
+  </div>
+</div>
 <div id="qrPanel" class="body hidden">
   <h3>支付二维码 <button class="btn" onclick="closeQrModal()">关闭</button></h3>
   <img id="qrImage" alt="支付二维码">
@@ -707,6 +912,16 @@ let SHOW_ARCHIVED_ACCOUNTS = false;
 let SHOW_PLUS_ACCOUNTS_ONLY = false;
 const ACCOUNT_SELECTED = new Set();
 const OUTLOOK_SELECTED = new Set();
+let AUTO_TASK_MODE = 'twofa';
+let AUTO_TASK_ACCOUNTS = [];
+let AUTO_TASK_TOTAL = 0;
+let AUTO_TASK_PAGE = 1;
+const AUTO_TASK_PAGE_SIZE = 20;
+const AUTO_TASK_SELECTED = new Set();
+let autoTaskLoading = false;
+let autoTaskTimer = null;
+let autoTaskSelectAll = false;
+let EXTRACT_LINK_CONTEXT = null;
 let JOBS = [];
 let JOBS_TOTAL = 0;
 let JOB_STATUS_COUNTS = {};
@@ -827,19 +1042,29 @@ async function loadRuntimeResources() {
 }
 
 // ---------- Tab 切换 ----------
-function activateTab(tab, persist=true) {
-  const allowed = ['register','accounts','codex','outlook','config'];
+function activateTab(tab, persist=true, pushState=true) {
+  const allowed = ['register','accounts','codex','outlook','proxies','config'];
   if (!allowed.includes(tab)) tab = 'register';
   $$('nav button').forEach(x => x.classList.toggle('active', x.dataset.tab === tab));
   allowed.forEach(t => $('#tab-'+t).classList.toggle('hidden', t !== tab));
   if (persist) localStorage.setItem('gpt_console_active_tab', tab);
+  if (pushState && location.hash !== '#'+tab) {
+    history.pushState({tab}, '', '#'+tab);
+  }
   if (tab === 'accounts') loadAccounts();
   if (tab === 'codex') loadCodex();
   if (tab === 'outlook') loadOutlook();
+  if (tab === 'proxies') loadProxyManager();
   if (tab === 'config') loadConfig();
-  if (tab === 'register') refreshJobs();
+  if (tab === 'register') { refreshJobs(); loadRegistrationSettings(); }
 }
-$$('nav button').forEach(b => b.addEventListener('click', () => activateTab(b.dataset.tab)));
+$$('nav button').forEach(b => b.addEventListener('click', () => { activateTab(b.dataset.tab); }));
+
+// hash 变化时自动切 tab（浏览器前进/后退）
+window.addEventListener('hashchange', () => {
+  const tab = (location.hash || '#register').replace('#', '');
+  activateTab(tab, true, false);
+});
 
 // ---------- 概览 ----------
 async function loadSummary() {
@@ -855,6 +1080,38 @@ async function loadSummary() {
 }
 
 // ---------- 注册 / 任务 ----------
+async function loadRegistrationSettings() {
+  try {
+    const r = await api('/api/registration/settings');
+    $('#regAutoRetries').value = String(r.auto_retries ?? 3);
+    $('#regAutoRetries').disabled = !r.editable;
+    $('#btnSaveRegSettings').disabled = !r.editable;
+    $('#btnSaveRegSettings').title = r.editable ? '保存后立即生效' : '该设置由主授权码管理';
+  } catch(e) {
+    $('#btnSaveRegSettings').title = '读取设置失败：' + e.message;
+  }
+}
+$('#btnSaveRegSettings').addEventListener('click', async () => {
+  const autoRetries = parseInt($('#regAutoRetries').value, 10);
+  if (!Number.isInteger(autoRetries) || autoRetries < 0 || autoRetries > 10) {
+    showToast('失败自动重试次数需为 0~10 的整数');
+    return;
+  }
+  $('#btnSaveRegSettings').disabled = true;
+  try {
+    const r = await api('/api/registration/settings', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({auto_retries:autoRetries}),
+    });
+    $('#regAutoRetries').value = String(r.auto_retries);
+    showToast(`失败自动重试次数已设为 ${r.auto_retries}，立即生效`);
+  } catch(e) {
+    showToast('保存失败：' + e.message);
+  } finally {
+    $('#btnSaveRegSettings').disabled = false;
+  }
+});
 $('#btnStart').addEventListener('click', async () => {
   const count = parseInt($('#regCount').value || '1', 10);
   const workers = parseInt($('#regWorkers').value || '3', 10);
@@ -972,7 +1229,7 @@ async function refreshJobs() {
 
 let modalScrollY = 0;
 function updateModalScrollLock() {
-  const opened = !$('#logPanel').classList.contains('hidden') || !$('#retryLogPanel').classList.contains('hidden') || !$('#qrPanel').classList.contains('hidden') || !$('#secretPanel').classList.contains('hidden') || !$('#agentTokenPanel').classList.contains('hidden');
+  const opened = !$('#logPanel').classList.contains('hidden') || !$('#retryLogPanel').classList.contains('hidden') || !$('#qrPanel').classList.contains('hidden') || !$('#secretPanel').classList.contains('hidden') || !$('#agentTokenPanel').classList.contains('hidden') || !$('#autoTaskPanel').classList.contains('hidden') || !$('#extractLinkPanel').classList.contains('hidden');
   const locked = document.body.classList.contains('modal-open');
   if (opened && !locked) {
     modalScrollY = window.scrollY || document.documentElement.scrollTop || 0;
@@ -994,6 +1251,8 @@ function closeLogModal() {
 }
 function closeRetryLogModal() {
   retryLogEmail = null;
+  retryLogType = 'codex';
+  retryLogAccountId = null;
   clearInterval(retryLogTimer);
   $('#retryLogPanel').classList.add('hidden');
   updateModalScrollLock();
@@ -1038,6 +1297,292 @@ async function openAgentToken(id, email) {
   updateModalScrollLock();
 }
 $('#btnCopyAgentTokenValue').addEventListener('click', () => copyText($('#agentTokenValue').value));
+
+function autoTaskConfig() {
+  return {
+    twofa: {label:'创建2FA', query:'twofa=disabled', endpoint:'/api/accounts/create-2fa-bulk'},
+    password: {label:'创建密码', query:'password=missing', endpoint:'/api/accounts/create-password-bulk'},
+    codex: {label:'补跑Codex', query:'codex=incomplete', endpoint:'/api/codex/retry-bulk'},
+  }[AUTO_TASK_MODE];
+}
+function closeExtractLinkPanel() {
+  EXTRACT_LINK_CONTEXT = null;
+  $('#externalIdealCdk').value = '';
+  $('#extractLinkPanel').classList.add('hidden');
+  updateModalScrollLock();
+}
+
+function initRuntimeResourceBox() {
+  const box = $('#runtimeResource');
+  const head = box.querySelector('.runtime-resource-head');
+  const grip = document.createElement('span');
+  grip.className = 'runtime-resource-grip';
+  grip.textContent = '⠿ 拖动/缩放';
+  head.appendChild(grip);
+  const STORE = 'turb_runtime_box_bounds';
+  const clamp = (x, y, w, h) => {
+    const vw = window.innerWidth, vh = window.innerHeight;
+    w = Math.max(220, Math.min(w, vw - 16));
+    h = Math.max(92, Math.min(h, vh - 16));
+    x = Math.max(8, Math.min(x, vw - w - 8));
+    y = Math.max(8, Math.min(y, vh - h - 8));
+    return { x, y, w, h };
+  };
+  const apply = (b) => {
+    box.style.left = `${b.x}px`;
+    box.style.top = `${b.y}px`;
+    box.style.width = `${b.w}px`;
+    box.style.height = `${b.h}px`;
+    box.style.right = 'auto';
+    box.style.bottom = 'auto';
+  };
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(STORE) || 'null'); } catch (e) {}
+  if (saved && Number(saved.w) >= 220 && Number(saved.h) >= 92) {
+    apply(clamp(Number(saved.x) || 12, Number(saved.y) || 12, Number(saved.w), Number(saved.h)));
+  }
+  let persistQueued = false;
+  const persist = () => {
+    const r = box.getBoundingClientRect();
+    const b = clamp(r.left, r.top, r.width, r.height);
+    try { localStorage.setItem(STORE, JSON.stringify(b)); } catch (e) {}
+  };
+  const persistSoon = () => {
+    if (persistQueued) return;
+    persistQueued = true;
+    requestAnimationFrame(() => { persistQueued = false; persist(); });
+  };
+  if (window.ResizeObserver) {
+    new ResizeObserver(persistSoon).observe(box);
+  }
+  window.addEventListener('resize', () => {
+    const r = box.getBoundingClientRect();
+    apply(clamp(r.left, r.top, r.width, r.height));
+    persist();
+  });
+  let drag = null;
+  head.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('button, a, input, select, textarea')) return;
+    if (e.button !== 0) return;
+    const r = box.getBoundingClientRect();
+    drag = { startX: e.clientX, startY: e.clientY, baseX: r.left, baseY: r.top };
+    box.classList.add('dragging');
+    head.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  head.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const r = box.getBoundingClientRect();
+    const b = clamp(
+      drag.baseX + e.clientX - drag.startX,
+      drag.baseY + e.clientY - drag.startY,
+      r.width,
+      r.height,
+    );
+    box.style.left = `${b.x}px`;
+    box.style.top = `${b.y}px`;
+    box.style.right = 'auto';
+    box.style.bottom = 'auto';
+  });
+  const endDrag = (e) => {
+    if (!drag) return;
+    drag = null;
+    box.classList.remove('dragging');
+    try { head.releasePointerCapture(e.pointerId); } catch (err) {}
+    persist();
+  };
+  head.addEventListener('pointerup', endDrag);
+  head.addEventListener('pointercancel', endDrag);
+}
+function autoTaskRowBusy(row) {
+  if (AUTO_TASK_MODE === 'twofa') return ['queued','running'].includes(row.twofa_task_status || '');
+  if (AUTO_TASK_MODE === 'password') return ['queued','running'].includes(row.password_task_status || '');
+  return (row.codex_status || '') === 'retrying';
+}
+function autoTaskRowStatus(row) {
+  let status = '';
+  if (AUTO_TASK_MODE === 'twofa') status = row.twofa_task_status || '未创建';
+  else if (AUTO_TASK_MODE === 'password') status = row.password_task_status || '未创建';
+  else status = row.codex_status || '未授权';
+  const labels = {queued:'排队中',running:'执行中',retrying:'执行中',failed:'上次失败',stopped:'已停止',skipped:'已跳过'};
+  return labels[status] || status;
+}
+function autoTaskRowLogButton(row) {
+  if (AUTO_TASK_MODE === 'codex') {
+    return `<button data-task-log="codex" data-task-account-id="${esc(row.id)}" data-task-email="${esc(row.email || '')}">Codex日志</button>`;
+  }
+  const status = AUTO_TASK_MODE === 'password' ? row.password_task_status : row.twofa_task_status;
+  if (!status) return '<span class="muted">-</span>';
+  const label = AUTO_TASK_MODE === 'password' ? '密码日志' : '2FA日志';
+  return `<button data-task-log="${esc(AUTO_TASK_MODE)}" data-task-account-id="${esc(row.id)}" data-task-email="${esc(row.email || '')}">${label}</button>`;
+}
+function renderAutoTaskAccounts() {
+  const totalPages = Math.max(1, Math.ceil(AUTO_TASK_TOTAL / AUTO_TASK_PAGE_SIZE));
+  $('#autoTaskAccountsBody').innerHTML = AUTO_TASK_ACCOUNTS.map(row => {
+    const busy = autoTaskRowBusy(row);
+    const checked = AUTO_TASK_SELECTED.has(Number(row.id));
+    return `<tr>
+      <td><input type="checkbox" data-auto-task-account="${esc(row.id)}" ${checked ? 'checked' : ''} ${busy ? 'disabled' : ''}></td>
+      <td class="muted">#${esc(row.id)}</td>
+      <td>${esc(row.email || '')}</td>
+      <td>${busy ? '<span class="pill status-running">' : '<span class="muted">'}${esc(autoTaskRowStatus(row))}</span></td>
+      <td>${autoTaskRowLogButton(row)}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="5" class="muted">没有符合条件的账号</td></tr>';
+  $('#autoTaskSelectedHint').textContent = `已选 ${AUTO_TASK_SELECTED.size} · 候选 ${AUTO_TASK_TOTAL}`;
+  $('#btnSubmitAutoTask').disabled = AUTO_TASK_SELECTED.size === 0;
+  $('#btnSubmitAutoTask').textContent = `${autoTaskConfig().label} (${AUTO_TASK_SELECTED.size})`;
+  $('#autoTaskPageInfo').textContent = `第 ${AUTO_TASK_PAGE} / ${totalPages} 页`;
+  $('#btnAutoTaskPrev').disabled = AUTO_TASK_PAGE <= 1;
+  $('#btnAutoTaskNext').disabled = AUTO_TASK_PAGE >= totalPages;
+  const eligible = AUTO_TASK_ACCOUNTS.filter(row => !autoTaskRowBusy(row));
+  const allSelected = eligible.length > 0 && eligible.every(row => AUTO_TASK_SELECTED.has(Number(row.id)));
+  $('#btnSelectAutoTaskPage').textContent = allSelected ? '取消当前页' : '全选当前页';
+  const selectAll = $('#autoTaskSelectAll');
+  if (selectAll) {
+    selectAll.checked = autoTaskSelectAll;
+    selectAll.indeterminate = !autoTaskSelectAll && eligible.some(row => AUTO_TASK_SELECTED.has(Number(row.id)));
+  }
+}
+async function loadAutoTaskAccounts() {
+  if (autoTaskLoading) return;
+  autoTaskLoading = true;
+  try {
+    const q = $('#qAutoTaskAccounts').value.trim();
+    const config = autoTaskConfig();
+    const res = await api(`/api/accounts?paged=1&page=${AUTO_TASK_PAGE}&page_size=${AUTO_TASK_PAGE_SIZE}&archived=0&${config.query}&q=${encodeURIComponent(q)}`);
+    AUTO_TASK_ACCOUNTS = res.items || [];
+    AUTO_TASK_TOTAL = Number(res.total || 0);
+    const totalPages = Math.max(1, Math.ceil(AUTO_TASK_TOTAL / AUTO_TASK_PAGE_SIZE));
+    if (AUTO_TASK_PAGE > totalPages) { AUTO_TASK_PAGE = totalPages; autoTaskLoading = false; return loadAutoTaskAccounts(); }
+    renderAutoTaskAccounts();
+  } catch (err) {
+    $('#autoTaskAccountsBody').innerHTML = `<tr><td colspan="4" class="muted">加载失败：${esc(err.message)}</td></tr>`;
+  } finally {
+    autoTaskLoading = false;
+  }
+}
+function openAutoTaskPanel() {
+  AUTO_TASK_SELECTED.clear();
+  autoTaskSelectAll = false;
+  AUTO_TASK_PAGE = 1;
+  $('#autoTaskPanel').classList.remove('hidden');
+  updateModalScrollLock();
+  loadAutoTaskAccounts();
+  clearInterval(autoTaskTimer);
+  autoTaskTimer = setInterval(loadAutoTaskAccounts, 5000);
+}
+async function fetchAllAutoTaskCandidateIds() {
+  const config = autoTaskConfig();
+  const q = $('#qAutoTaskAccounts').value.trim();
+  const ids = [];
+  let page = 1;
+  let totalPages = 1;
+  do {
+    const res = await api(`/api/accounts?paged=1&page=${page}&page_size=500&archived=0&${config.query}&q=${encodeURIComponent(q)}`);
+    const rows = res.items || [];
+    rows.forEach(row => { if (!autoTaskRowBusy(row)) ids.push(Number(row.id)); });
+    totalPages = Math.max(1, Math.ceil(Number(res.total || rows.length || 0) / 500));
+    page += 1;
+  } while (page <= totalPages);
+  return ids;
+}
+async function toggleAutoTaskSelectAll(checked) {
+  const selectAll = $('#autoTaskSelectAll');
+  if (selectAll) selectAll.disabled = true;
+  try {
+    if (checked) {
+      const ids = await fetchAllAutoTaskCandidateIds();
+      ids.forEach(id => AUTO_TASK_SELECTED.add(id));
+      autoTaskSelectAll = true;
+    } else {
+      const ids = await fetchAllAutoTaskCandidateIds();
+      ids.forEach(id => AUTO_TASK_SELECTED.delete(id));
+      autoTaskSelectAll = false;
+    }
+  } catch (err) {
+    if (selectAll) selectAll.checked = autoTaskSelectAll;
+    showToast(`全选候选账号失败: ${err.message}`);
+  } finally {
+    if (selectAll) selectAll.disabled = false;
+    renderAutoTaskAccounts();
+  }
+}
+function closeAutoTaskPanel() {
+  clearInterval(autoTaskTimer);
+  autoTaskTimer = null;
+  $('#autoTaskPanel').classList.add('hidden');
+  updateModalScrollLock();
+}
+async function submitAutoTasks() {
+  const ids = Array.from(AUTO_TASK_SELECTED);
+  if (!ids.length) return;
+  const config = autoTaskConfig();
+  if (!confirm(`确定为选中的 ${ids.length} 个账号${config.label}吗？\n\n任务将进入后台队列。`)) return;
+  const btn = $('#btnSubmitAutoTask');
+  btn.disabled = true;
+  btn.textContent = '提交中…';
+  try {
+    const body = {account_ids: ids};
+    if (AUTO_TASK_MODE === 'codex') body.workers = Math.max(1, Math.min(16, Number($('#codexBulkWorkers')?.value || 3)));
+    const result = await api(config.endpoint, {
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body),
+    });
+    const started = Number(result.started_count || (result.started || []).length || 0);
+    const skipped = Number(result.skipped_count || (result.skipped || []).length || 0);
+    showToast(skipped ? `已入队 ${started} 个，跳过 ${skipped} 个` : `已入队 ${started} 个任务`);
+    const first = (result.started || [])[0];
+    if (first && first.email) {
+      closeAutoTaskPanel();
+      openRetryLog(first.email, AUTO_TASK_MODE, first.id);
+    }
+    AUTO_TASK_SELECTED.clear();
+    autoTaskSelectAll = false;
+    await loadAutoTaskAccounts();
+    loadAccounts();
+  } catch (err) {
+    showToast(`${config.label}提交失败: ${err.message}`);
+  } finally {
+    renderAutoTaskAccounts();
+  }
+}
+
+$('#btnOpenAutoTask').addEventListener('click', openAutoTaskPanel);
+$('#btnCloseAutoTask').addEventListener('click', closeAutoTaskPanel);
+$('#btnSubmitAutoTask').addEventListener('click', submitAutoTasks);
+$('#autoTaskAccountsBody').addEventListener('click', (event) => {
+  const btn = event.target.closest('[data-task-log]');
+  if (!btn) return;
+  closeAutoTaskPanel();
+  openRetryLog(btn.dataset.taskEmail, btn.dataset.taskLog, Number(btn.dataset.taskAccountId));
+});
+$('#qAutoTaskAccounts').addEventListener('input', debounce(() => {
+  AUTO_TASK_SELECTED.clear(); autoTaskSelectAll = false; AUTO_TASK_PAGE = 1; loadAutoTaskAccounts();
+}, 250));
+$$('input[name="autoTaskMode"]').forEach(input => input.addEventListener('change', () => {
+  AUTO_TASK_MODE = input.value;
+  AUTO_TASK_SELECTED.clear();
+  autoTaskSelectAll = false;
+  AUTO_TASK_PAGE = 1;
+  loadAutoTaskAccounts();
+}));
+$('#autoTaskAccountsBody').addEventListener('change', e => {
+  const checkbox = e.target.closest('[data-auto-task-account]');
+  if (!checkbox) return;
+  const id = Number(checkbox.dataset.autoTaskAccount);
+  if (checkbox.checked) AUTO_TASK_SELECTED.add(id); else AUTO_TASK_SELECTED.delete(id);
+  renderAutoTaskAccounts();
+});
+$('#btnSelectAutoTaskPage').addEventListener('click', () => {
+  const eligible = AUTO_TASK_ACCOUNTS.filter(row => !autoTaskRowBusy(row));
+  const allSelected = eligible.length > 0 && eligible.every(row => AUTO_TASK_SELECTED.has(Number(row.id)));
+  eligible.forEach(row => allSelected ? AUTO_TASK_SELECTED.delete(Number(row.id)) : AUTO_TASK_SELECTED.add(Number(row.id)));
+  autoTaskSelectAll = false;
+  renderAutoTaskAccounts();
+});
+$('#autoTaskSelectAll').addEventListener('change', e => toggleAutoTaskSelectAll(e.target.checked));
+$('#btnAutoTaskPrev').addEventListener('click', () => { AUTO_TASK_PAGE = Math.max(1, AUTO_TASK_PAGE - 1); loadAutoTaskAccounts(); });
+$('#btnAutoTaskNext').addEventListener('click', () => { AUTO_TASK_PAGE += 1; loadAutoTaskAccounts(); });
 
 $('#jobsBody').addEventListener('pointerdown', (e) => {
   const retryBtn = e.target.closest('[data-retry-job]');
@@ -1246,9 +1791,11 @@ async function loadAccounts() {
   try {
     const archived = SHOW_ARCHIVED_ACCOUNTS ? 'only' : '0';
     const plan = SHOW_PLUS_ACCOUNTS_ONLY ? 'plus' : '';
+    const twofa = $('#accountTwofaFilter')?.value || '';
+    const password = $('#accountPasswordFilter')?.value || '';
     const q = $('#qAccounts') ? $('#qAccounts').value.trim() : '';
     const p = PAGERS.accounts;
-    const res = await api(`/api/accounts?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&q=${encodeURIComponent(q)}`);
+    const res = await api(`/api/accounts?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&twofa=${encodeURIComponent(twofa)}&password=${encodeURIComponent(password)}&q=${encodeURIComponent(q)}`);
     ACCOUNTS = res.items || [];
     ACCOUNTS_TOTAL = Number(res.total || ACCOUNTS.length || 0);
     const totalPages = Math.max(1, Math.ceil(ACCOUNTS_TOTAL / p.size));
@@ -1263,9 +1810,11 @@ async function pollAccountPlanStatuses() {
   try {
     const archived = SHOW_ARCHIVED_ACCOUNTS ? 'only' : '0';
     const plan = SHOW_PLUS_ACCOUNTS_ONLY ? 'plus' : '';
+    const twofa = $('#accountTwofaFilter')?.value || '';
+    const password = $('#accountPasswordFilter')?.value || '';
     const q = $('#qAccounts') ? $('#qAccounts').value.trim() : '';
     const p = PAGERS.accounts;
-    const snapshot = await api(`/api/accounts/plan-check-status?page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&q=${encodeURIComponent(q)}`);
+    const snapshot = await api(`/api/accounts/plan-check-status?page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&twofa=${encodeURIComponent(twofa)}&password=${encodeURIComponent(password)}&q=${encodeURIComponent(q)}`);
     const items = snapshot.items || [];
     const accountById = new Map(ACCOUNTS.map(r => [Number(r.id), r]));
     const hasUnknown = items.some(item => !accountById.has(Number(item.id)));
@@ -1284,9 +1833,12 @@ async function pollAccountPlanStatuses() {
         const isExtracting = ['queued', 'running'].includes(item.extract_link_status);
         const wasAgenting = ['queued', 'running'].includes(account?.codex_agent_status);
         const isAgenting = ['queued', 'running'].includes(item.codex_agent_status);
+        const wasCreatingTwofa = ['queued', 'running'].includes(account?.twofa_task_status);
+        const isCreatingTwofa = ['queued', 'running'].includes(item.twofa_task_status);
         if (wasChecking && !isChecking) needsFullReload = true;
         if (wasExtracting && !isExtracting) needsFullReload = true;
         if (wasAgenting && !isAgenting) needsFullReload = true;
+        if (wasCreatingTwofa && !isCreatingTwofa) needsFullReload = true;
         Object.assign(account, item);
       });
       planStatusRevision = snapshot.revision || '';
@@ -1328,6 +1880,22 @@ function _codexAgentCell(r) {
   if (s === 'failed') return `<div class="agent-token-cell"><span class="pill status-failed" title="${title}">失败</span>${gen}</div>`;
   return gen ? `<div class="agent-token-cell">${gen}</div>` : '<span class="muted">-</span>';
 }
+function _twofaTaskCell(r) {
+  const log = r.twofa_task_status ? `<button data-task-log="twofa" data-task-account-id="${esc(r.id)}" data-task-email="${esc(r.email)}">2FA日志</button>` : '';
+  if (r.totp_enabled) return `<span class="pill status-success">2FA已启用</span>${log}`;
+  const status = r.twofa_task_status || '';
+  const message = r.twofa_task_message || '';
+  const error = r.twofa_task_error || '';
+  if (status === 'queued') return `<span class="pill status-running" title="${esc(message || '任务正在排队')}">2FA排队</span>${log}`;
+  if (status === 'running') return `<span class="pill status-running" title="${esc(message || '正在创建 2FA')}">创建2FA中</span>${log}`;
+  const label = status === 'failed' ? '重试2FA' : '创建2FA';
+  const failed = status === 'failed' ? `<span class="pill status-failed" title="${esc(error || message || '创建失败')}">2FA失败</span>` : '<span class="muted">2FA未启用</span>';
+  return `${failed}<button class="good" data-create-twofa="${esc(r.id)}" title="${esc(error ? '重新创建；上次失败：' + error : '登录该账号并自动收取两封邮箱 OTP，创建并保存 TOTP')}">${label}</button><button data-manual-twofa="${esc(r.id)}" title="手动填写 TOTP Base32 Secret 或 otpauth 链接">手动填写2FA</button>${log}`;
+}
+function _passwordTaskLogButton(r) {
+  if (!r.password_task_status) return '';
+  return `<button data-task-log="password" data-task-account-id="${esc(r.id)}" data-task-email="${esc(r.email)}">密码日志</button>`;
+}
 function _fmtPlanTime(v, dateOnly = false) {
   if (!v) return '';
   try {
@@ -1357,6 +1925,19 @@ function _discountLabel(r) {
   if (type === 'percentage' && !Number.isNaN(n)) { const v = Number.isInteger(n) ? String(n) : String(n); return `${v}%折扣`; }
   if (!Number.isNaN(n)) return `${n}折扣`;
   return `${amount}折扣`;
+}
+function _gcashPlanPill(r) {
+  const checkedAt = r.gcash_checked_at || '';
+  const error = r.gcash_error || '';
+  const title = [checkedAt ? `检测: ${checkedAt}` : '', error].filter(Boolean).join('；');
+  if (['queued', 'running'].includes(r.gcash_check_status)) {
+    return '<span class="pill status-running" title="历史账号正在后台自动检测 Gcash 资格">Gcash：检测中</span>';
+  }
+  if (!checkedAt) return '<span class="pill status-running" title="尚未执行 Gcash 检测">Gcash：未检测</span>';
+  if (r.gcash_check_ok === false) return `<span class="pill status-failed" title="${esc(title)}">Gcash：失败</span>`;
+  if (r.gcash_eligible === true) return `<span class="pill status-success" title="${esc(title)}">Gcash：可用</span>`;
+  if (r.gcash_eligible === false) return `<span class="pill status-used" title="${esc(title)}">Gcash：不可用</span>`;
+  return `<span class="pill status-running" title="${esc(title || '接口未返回资格字段')}">Gcash：待判定</span>`;
 }
 function _planCell(r) {
   const ok = r.plan_check_ok;
@@ -1391,10 +1972,13 @@ function _planCell(r) {
     if (!checkedOk) {
       return `<span class="pill status-running" title="${title}">${esc(plan)}（待查资格）</span>`;
     }
-    const text = r.plus_trial_eligible ? 'free(可Plus试用)' : 'free';
+    const displayText = r.plus_trial_eligible ? 'free(可Plus试用)' : 'free';
     const cls = r.plus_trial_eligible ? 'status-success' : 'status-used';
-    const t = r.plus_trial_eligible ? `${title}；Plus 试用资格可用` : title;
-    return `<span class="pill ${cls}" title="${t}">${esc(text)}</span>`;
+    const hints = [];
+    if (r.plus_trial_eligible) hints.push("Plus 试用资格可用");
+    const t = hints.length ? `${title}；${hints.join("；")}` : title;
+    return `<div class="extract-link-cell"><span class="pill ${cls}" title="${t}">${esc(displayText)}</span>${_gcashPlanPill(r)}</div>`;
+
   }
 
   const isPaid = lower.includes('plus') || lower.includes('pro') || lower.includes('team') || lower.includes('go');
@@ -1451,7 +2035,8 @@ function _extractLinkCell(r) {
     const copy = link ? cbtn('复制提链', link, 'extract-link-btn extract-copy') : '';
     const qrBtn = qr ? `<button class="extract-link-btn extract-qr" data-qr-url="${esc(qr)}" title="打开支付二维码图片">查看二维码</button>` : '';
     const expireHtml = expire ? `<div class="extract-link-expire" title="支付链接过期时间">支付到期：${esc(expire)}</div>` : '';
-    return `<div class="extract-link-cell"><span class="pill status-success" title="${title || esc(link)}">提链成功${typ ? '(' + esc(typ) + ')' : ''}</span>${copy}${qrBtn}${expireHtml}</div>`;
+    const typeLabel = typ === 'ideal_external' ? '外部荷兰iDEAL' : (typ === 'upi' ? '内置UPI' : typ);
+    return `<div class="extract-link-cell"><span class="pill status-success" title="${title || esc(link)}">提链成功${typeLabel ? '(' + esc(typeLabel) + ')' : ''}</span>${copy}${qrBtn}${expireHtml}</div>`;
   }
   if (s === 'failed') {
     const reason = err || msg || '未知原因';
@@ -1466,7 +2051,7 @@ function _extractLinkAction(r) {
   const eligible = plan === 'free' && !!r.plus_trial_eligible;
   if (!eligible) return '';
   const failedReason = s === 'failed' ? (r.extract_link_error || r.extract_link_message || '') : '';
-  return `<button class="good" data-extract-link="${esc(r.id)}" title="${esc(failedReason ? '重新提链；上次失败原因：' + failedReason : '为该 free(可Plus试用) 账号创建 PIX/UPI/KAKAO_PAY/IDEAL 提链任务')}">提链</button>`;
+  return `<button class="good" data-extract-link="${esc(r.id)}" title="${esc(failedReason ? '重新提链；上次失败原因：' + failedReason : '选择内置UPI或外部荷兰iDEAL渠道提取付款链接')}">提链</button>`;
 }
 function _codexAction(r) {
   const s = r.codex_status || '';
@@ -1488,15 +2073,15 @@ function renderAccounts() {
       <td><div class="main-cell">${esc(r.email)}${r.archived ? ' <span class="pill status-used" title="该账号已归档">归档</span>' : ''}</div><div class="sub-cell">${esc(r.user_name || '-')}</div></td>
       <td>${_planCell(r)}<div class="sub-cell">${_extractLinkCell(r)}</div></td>
       <td class="wrap" title="${esc(r.note || '')}">${r.note ? esc(short(r.note, 40)) : '<span class="muted">-</span>'}</td>
-      <td><div class="account-secret-cell">${r.has_registration_password ? `<button data-account-show-password="${esc(r.id)}" data-account-email="${esc(r.email)}">查看密码</button>` : '<span class="muted">无密码</span>'}<span>${r.totp_enabled ? '2FA已启用' : '<span class="muted">2FA未启用</span>'}</span></div></td>
+      <td><div class="account-secret-cell">${r.has_registration_password ? `<button data-account-show-password="${esc(r.id)}" data-account-email="${esc(r.email)}">查看密码</button>` : '<span class="muted">无密码</span>'}${_passwordTaskLogButton(r)}<span class="account-twofa-task">${_twofaTaskCell(r)}</span></div></td>
       <td>${_codexCell(r)}</td>
       <td class="actions actions-cell">
         <div class="account-row-actions">
-          <div class="account-action-group"><button class="primary" data-account-copy-secret="access_token" data-account-id="${esc(r.id)}" ${r.has_access_token ? '' : 'disabled'}>复制AT</button> <button class="good" data-account-copy-secret="copy_line" data-account-id="${esc(r.id)}">复制整行</button>${r.has_registration_password ? ` <button class="good" data-account-copy-secret="credentials_line" data-account-id="${esc(r.id)}" title="复制 邮箱----ChatGPT密码----TOTP">复制密码2FA</button>` : ''}</div>
-          <div class="account-action-group">${_codexAgentCell(r)}</div>
-          <div class="account-action-group"><button data-account-note="${esc(r.id)}" title="设置/清空该账号备注">备注</button> ${_planAction(r)} ${_extractLinkAction(r)}</div>
-          <div class="account-action-group">${_codexAction(r)} <button data-codex-log="${esc(r.email)}" title="查看该账号最近一次 Codex 补跑日志">补跑日志</button></div>
-          <div class="account-action-group danger-zone"><button data-account-archive="${esc(r.id)}" data-archived="${r.archived ? '0' : '1'}" title="${r.archived ? '恢复到默认账号列表' : '归档后默认账号列表不再显示'}">${r.archived ? '恢复' : '归档'}</button> <button class="danger" data-account-delete="${esc(r.id)}" data-email="${esc(r.email)}">删除</button></div>
+          <div class="account-action-group" data-action-group="凭据"><button class="primary" data-account-copy-secret="access_token" data-account-id="${esc(r.id)}" ${r.has_access_token ? '' : 'disabled'}>复制AT</button> <button class="good" data-account-copy-secret="session" data-account-id="${esc(r.id)}" ${r.has_access_token ? '' : 'disabled'} title="复制 /api/auth/session 完整内容">复制Session</button> <button class="good" data-account-copy-secret="copy_line" data-account-id="${esc(r.id)}">复制整行</button>${r.has_registration_password ? ` <button class="good" data-account-copy-secret="credentials_line" data-account-id="${esc(r.id)}" title="复制 邮箱----ChatGPT密码----TOTP">复制密码2FA</button>` : ''}</div>
+          <div class="account-action-group" data-action-group="Agent">${_codexAgentCell(r)}</div>
+          <div class="account-action-group" data-action-group="账号"><button data-account-note="${esc(r.id)}" title="设置/清空该账号备注">备注</button> ${_planAction(r)} ${_extractLinkAction(r)}</div>
+          <div class="account-action-group" data-action-group="Codex">${_codexAction(r)} <button data-codex-log="${esc(r.email)}" title="查看该账号最近一次 Codex 补跑日志">补跑日志</button></div>
+          <div class="account-action-group danger-zone" data-action-group="危险操作"><button data-account-archive="${esc(r.id)}" data-archived="${r.archived ? '0' : '1'}" title="${r.archived ? '恢复到默认账号列表' : '归档后默认账号列表不再显示'}">${r.archived ? '恢复' : '归档'}</button> <button class="danger" data-account-delete="${esc(r.id)}" data-email="${esc(r.email)}">删除</button></div>
         </div>
       </td>
     </tr>`).join('') || '<tr><td colspan="8" class="muted">暂无账号</td></tr>';
@@ -1514,6 +2099,7 @@ function updateAccountSelectionUi(pageRows = null) {
   const generateAgentBtn = $('#btnGenerateSelectedAgent');
   const downloadAgentBtn = $('#btnDownloadSelectedAgent');
   const uploadAgentSub2Btn = $('#btnUploadSelectedAgentSub2');
+  const createTwofaBtn = $('#btnCreateSelected2FA');
   const checkPlanBtn = $('#btnCheckSelectedPlans');
   const copySelectedBtn = $('#btnCopySelectedLines');
   const downloadTxtBtn = $('#btnDownloadSelectedTxt');
@@ -1528,6 +2114,7 @@ function updateAccountSelectionUi(pageRows = null) {
   if (generateAgentBtn) generateAgentBtn.disabled = ACCOUNT_SELECTED.size === 0;
   if (downloadAgentBtn) downloadAgentBtn.disabled = ACCOUNT_SELECTED.size === 0;
   if (uploadAgentSub2Btn) uploadAgentSub2Btn.disabled = ACCOUNT_SELECTED.size === 0;
+  if (createTwofaBtn) createTwofaBtn.disabled = ACCOUNT_SELECTED.size === 0;
   if (checkPlanBtn) checkPlanBtn.disabled = ACCOUNT_SELECTED.size === 0;
   if (copySelectedBtn) copySelectedBtn.disabled = ACCOUNT_SELECTED.size === 0;
   if (downloadTxtBtn) downloadTxtBtn.disabled = ACCOUNT_SELECTED.size === 0;
@@ -1551,10 +2138,14 @@ function updateAccountSelectionUi(pageRows = null) {
 }
 
 // ---------- 补跑日志面板 ----------
-let retryLogEmail = null, retryLogTimer = null;
+let retryLogEmail = null, retryLogType = 'codex', retryLogAccountId = null, retryLogTimer = null;
 
-function openRetryLog(email) {
+function openRetryLog(email, type = 'codex', accountId = null) {
   retryLogEmail = email;
+  retryLogType = type || 'codex';
+  retryLogAccountId = accountId;
+  const labels = {codex:'Codex补跑日志', password:'创建密码日志', twofa:'创建2FA日志'};
+  $('#retryLogTitle').textContent = labels[retryLogType] || '任务日志';
   $('#retryLogEmail').textContent = email;
   $('#retryLogPanel').classList.remove('hidden');
   updateModalScrollLock();
@@ -1566,7 +2157,10 @@ function openRetryLog(email) {
 async function pollRetryLog() {
   if (!retryLogEmail) return;
   try {
-    const r = await api(`/api/codex/retry-log?email=${encodeURIComponent(retryLogEmail)}`);
+    const url = retryLogType === 'codex'
+      ? `/api/codex/retry-log?email=${encodeURIComponent(retryLogEmail)}`
+      : `/api/accounts/task-log?account_id=${encodeURIComponent(retryLogAccountId)}&type=${encodeURIComponent(retryLogType)}`;
+    const r = await api(url);
     const c = $('#retryLogContent');
     const atBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 30;
     c.textContent = r.log || '(暂无日志，等待任务写入…)';
@@ -1604,9 +2198,9 @@ $('#accountsBody').addEventListener('click', async (e) => {
     copySecretBtn.disabled = true;
     try {
       const value = await fetchOneAccountSecret(id, field);
-      if (!value) { showToast('可复制内容为空'); return; }
+      if (!value) { showToast(field === 'session' ? '该账号未保存完整 Session（仅新注册账号包含），无法复制' : '可复制内容为空'); return; }
       copyText(value);
-      showToast(field === 'access_token' ? 'Token 已复制' : field === 'codex_agent_token' ? 'Agent Token 已复制' : '账号整行已复制');
+      showToast(field === 'access_token' ? 'Token 已复制' : field === 'codex_agent_token' ? 'Agent Token 已复制' : field === 'session' ? 'Session 已复制' : '账号整行已复制');
     } catch(err) {
       showToast('复制失败: ' + err.message);
     } finally {
@@ -1618,6 +2212,18 @@ $('#accountsBody').addEventListener('click', async (e) => {
   const planBtn = e.target.closest('[data-plan-check]');
   if (planBtn) {
     await checkOnePlan(Number(planBtn.dataset.planCheck), planBtn);
+    return;
+  }
+
+  const createTwofaBtn = e.target.closest('[data-create-twofa]');
+  if (createTwofaBtn) {
+    await createOneTwofa(Number(createTwofaBtn.dataset.createTwofa), createTwofaBtn);
+    return;
+  }
+
+  const manualTwofaBtn = e.target.closest('[data-manual-twofa]');
+  if (manualTwofaBtn) {
+    await setManualTwofa(Number(manualTwofaBtn.dataset.manualTwofa), manualTwofaBtn);
     return;
   }
 
@@ -1674,6 +2280,12 @@ $('#accountsBody').addEventListener('click', async (e) => {
   const logBtn = e.target.closest('[data-codex-log]');
   if (logBtn) {
     openRetryLog(logBtn.dataset.codexLog);
+    return;
+  }
+
+  const taskLogBtn = e.target.closest('[data-task-log]');
+  if (taskLogBtn) {
+    openRetryLog(taskLogBtn.dataset.taskEmail, taskLogBtn.dataset.taskLog, Number(taskLogBtn.dataset.taskAccountId));
     return;
   }
 
@@ -1775,6 +2387,15 @@ $('#showPlusAccountsOnly').addEventListener('change', async (e) => {
   await loadAccounts();
   await pollAccountPlanStatuses();
 });
+for (const selector of ['#accountTwofaFilter', '#accountPasswordFilter']) {
+  $(selector).addEventListener('change', async () => {
+    ACCOUNT_SELECTED.clear();
+    PAGERS.accounts.page = 1;
+    planStatusRevision = '';
+    await loadAccounts();
+    await pollAccountPlanStatuses();
+  });
+}
 $('#btnRefreshAccounts').addEventListener('click', async () => {
   const btn = $('#btnRefreshAccounts');
   const old = btn.textContent;
@@ -1902,46 +2523,65 @@ async function checkOnePlan(id, btn) {
   }
 }
 
-async function extractOneLink(id, btn) {
+async function createOneTwofa(id, btn) {
   const acc = ACCOUNTS.find(a => Number(a.id) === Number(id));
   if (!acc) { showToast('账号不存在'); return; }
-  const plan = (acc.current_plan_type || acc.plan_type || '').toString().toLowerCase();
-  if (plan !== 'free' || !acc.plus_trial_eligible) {
-    showToast('仅支持 free(可Plus试用) 账号提链');
-    return;
-  }
-  if (!confirm(`确定为该账号提链吗？\n\n${acc.email || ('#' + id)}\n\n提链类型按配置使用 PIX/UPI/KAKAO_PAY/IDEAL，成功会消耗 1 次 CDK。`)) return;
+  if (acc.totp_enabled) { showToast('该账号已经启用 2FA'); return; }
+  if (!confirm(`确定为该账号创建 2FA 吗？\n\n${acc.email || ('#' + id)}\n\n任务会排队执行，并自动收取登录 OTP 和 2FA 重认证 OTP。`)) return;
   const old = btn.textContent;
   btn.disabled = true;
-  btn.textContent = '提链中…';
+  btn.textContent = '入队中…';
   try {
-    await api('/api/accounts/extract-link', {
+    await api('/api/accounts/create-2fa', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({account_id: id}),
     });
-    showToast('提链任务已入队');
+    showToast('创建 2FA 任务已入队');
+    openRetryLog(acc.email, 'twofa', id);
     await pollAccountPlanStatuses();
   } catch(err) {
-    showToast('提链失败: ' + err.message);
+    showToast('创建 2FA 失败: ' + err.message);
     btn.disabled = false;
     btn.textContent = old;
   }
 }
 
-async function extractSelectedLinks() {
+async function setManualTwofa(id, btn) {
+  const acc = ACCOUNTS.find(a => Number(a.id) === Number(id));
+  if (!acc) { showToast('账号不存在'); return; }
+  const value = prompt(`手动填写 2FA\n\n${acc.email || ('#' + id)}\n\n请输入 TOTP Base32 Secret 或 otpauth:// 链接`, '');
+  if (value === null) return;
+  if (!value.trim()) { showToast('2FA Secret 为空'); return; }
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '保存中…';
+  try {
+    const result = await api(`/api/accounts/${encodeURIComponent(id)}/twofa-secret`, {
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({secret:value.trim()}),
+    });
+    showToast(result.message || '2FA 已保存');
+    await loadAccounts();
+  } catch (err) {
+    showToast('手动填写 2FA 失败: ' + err.message);
+    btn.disabled = false;
+    btn.textContent = old;
+  }
+}
+
+async function createSelectedTwofa() {
   const ids = Array.from(ACCOUNT_SELECTED);
   if (ids.length === 0) { showToast('请先选择账号'); return; }
   const selected = ids.map(id => ACCOUNTS.find(a => Number(a.id) === Number(id))).filter(Boolean);
-  const eligible = selected.filter(a => (a.current_plan_type || a.plan_type || '').toString().toLowerCase() === 'free' && !!a.plus_trial_eligible);
-  if (!eligible.length) { showToast('选中账号里没有 free(可Plus试用)'); return; }
-  if (!confirm(`确定批量提链 ${eligible.length} 个 free(可Plus试用) 账号吗？\n\n非可试用账号会自动跳过。成功会按账号消耗 CDK 次数。`)) return;
-  const btn = $('#btnExtractSelectedLinks');
+  const eligible = selected.filter(a => !a.totp_enabled && !['queued','running'].includes(a.twofa_task_status));
+  if (!eligible.length) { showToast('选中账号均已启用 2FA 或任务正在执行'); return; }
+  if (!confirm(`确定为选中的 ${eligible.length} 个账号创建 2FA 吗？\n\n任务会进入队列逐个执行；已启用或正在执行的账号会自动跳过。`)) return;
+  const btn = $('#btnCreateSelected2FA');
   const old = btn.textContent;
   btn.disabled = true;
-  btn.textContent = '提链中…';
+  btn.textContent = '入队中…';
   try {
-    const r = await api('/api/accounts/extract-link-bulk', {
+    const r = await api('/api/accounts/create-2fa-bulk', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({account_ids: ids}),
@@ -1950,12 +2590,98 @@ async function extractSelectedLinks() {
     showToast(skipped ? `已入队 ${r.started_count || 0} 个，跳过/失败 ${skipped} 个` : `已入队 ${r.started_count || 0} 个`);
     await pollAccountPlanStatuses();
   } catch(err) {
-    showToast('批量提链失败: ' + err.message);
+    showToast('批量创建 2FA 失败: ' + err.message);
     updateAccountSelectionUi();
   } finally {
     btn.textContent = old;
   }
 }
+
+async function extractOneLink(id, btn) {
+  const acc = ACCOUNTS.find(a => Number(a.id) === Number(id));
+  if (!acc) { showToast('账号不存在'); return; }
+  const plan = (acc.current_plan_type || acc.plan_type || '').toString().toLowerCase();
+  if (plan !== 'free' || !acc.plus_trial_eligible) {
+    showToast('仅支持 free(可Plus试用) 账号提链');
+    return;
+  }
+  openExtractLinkPanel({mode:'single', ids:[Number(id)], count:1, label:acc.email || ('#' + id)});
+}
+
+async function extractSelectedLinks() {
+  const ids = Array.from(ACCOUNT_SELECTED);
+  if (ids.length === 0) { showToast('请先选择账号'); return; }
+  const selected = ids.map(id => ACCOUNTS.find(a => Number(a.id) === Number(id))).filter(Boolean);
+  const eligible = selected.filter(a => (a.current_plan_type || a.plan_type || '').toString().toLowerCase() === 'free' && !!a.plus_trial_eligible);
+  if (!eligible.length) { showToast('选中账号里没有 free(可Plus试用)'); return; }
+  openExtractLinkPanel({mode:'bulk', ids, count:eligible.length, label:`${eligible.length} 个符合条件的账号`});
+}
+
+function selectedExtractLinkProvider() {
+  return $('input[name="extractLinkProvider"]:checked')?.value || 'builtin';
+}
+
+function syncExtractLinkProviderForm() {
+  const external = selectedExtractLinkProvider() === 'external_ideal';
+  $('#externalIdealCdkField').classList.toggle('hidden', !external);
+  if (external) $('#externalIdealCdk').focus();
+}
+
+function openExtractLinkPanel(context) {
+  EXTRACT_LINK_CONTEXT = context;
+  $('#extractLinkTargetHint').textContent = `目标：${context.label}`;
+  const builtin = $('input[name="extractLinkProvider"][value="builtin"]');
+  if (builtin) builtin.checked = true;
+  $('#externalIdealCdk').value = '';
+  syncExtractLinkProviderForm();
+  $('#extractLinkPanel').classList.remove('hidden');
+  updateModalScrollLock();
+}
+
+async function submitExtractLinkTask() {
+  if (!EXTRACT_LINK_CONTEXT) return;
+  const provider = selectedExtractLinkProvider();
+  const cdk = $('#externalIdealCdk').value.trim();
+  if (provider === 'external_ideal' && !cdk) {
+    showToast('请填写外部荷兰 iDEAL CDK');
+    $('#externalIdealCdk').focus();
+    return;
+  }
+  const context = EXTRACT_LINK_CONTEXT;
+  const btn = $('#btnSubmitExtractLink');
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '入队中…';
+  try {
+    const endpoint = context.mode === 'single' ? '/api/accounts/extract-link' : '/api/accounts/extract-link-bulk';
+    const body = context.mode === 'single'
+      ? {account_id: context.ids[0], provider}
+      : {account_ids: context.ids, provider};
+    if (provider === 'external_ideal') body.cdk = cdk;
+    const r = await api(endpoint, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body),
+    });
+    if (context.mode === 'single') {
+      showToast(provider === 'external_ideal' ? '外部荷兰iDEAL提链任务已入队' : '内置UPI提链任务已入队');
+    } else {
+      const skipped = (r.skipped_count || 0) + (r.busy_count || 0) + (r.failed_count || 0);
+      showToast(skipped ? `已入队 ${r.started_count || 0} 个，跳过/失败 ${skipped} 个` : `已入队 ${r.started_count || 0} 个`);
+    }
+    closeExtractLinkPanel();
+    await pollAccountPlanStatuses();
+  } catch(err) {
+    showToast('提链提交失败: ' + err.message);
+  } finally {
+    btn.textContent = old;
+    btn.disabled = false;
+  }
+}
+
+$$('input[name="extractLinkProvider"]').forEach(input => input.addEventListener('change', syncExtractLinkProviderForm));
+$('#btnCloseExtractLink').addEventListener('click', closeExtractLinkPanel);
+$('#btnSubmitExtractLink').addEventListener('click', submitExtractLinkTask);
 
 async function generateOneCodexAgent(id, btn) {
   const acc = ACCOUNTS.find(a => Number(a.id) === Number(id));
@@ -2362,9 +3088,10 @@ function poolLabel(src) {
 async function loadOutlook() {
   try {
     const source = $('#poolSource')?.value || 'outlook';
+    const status = $('#poolStatus')?.value || '';
     const q = $('#qOutlook') ? $('#qOutlook').value.trim() : '';
     const p = PAGERS.outlook;
-    const res = await api(`/api/outlook?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&source=${encodeURIComponent(source)}&q=${encodeURIComponent(q)}`);
+    const res = await api(`/api/outlook?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&source=${encodeURIComponent(source)}&status=${encodeURIComponent(status)}&q=${encodeURIComponent(q)}`);
     OUTLOOK = res.items || [];
     OUTLOOK_TOTAL = Number(res.total || OUTLOOK.length || 0);
     const totalPages = Math.max(1, Math.ceil(OUTLOOK_TOTAL / p.size));
@@ -2429,6 +3156,11 @@ $('#poolSource').addEventListener('change', () => {
   PAGERS.outlook.page = 1;
   OUTLOOK_SELECTED.clear();
   if ($('#poolSource').value !== 'all' && $('#poolSource').value !== 'cloudflare_domain') $('#importSource').value = $('#poolSource').value;
+  loadOutlook();
+});
+$('#poolStatus').addEventListener('change', () => {
+  PAGERS.outlook.page = 1;
+  OUTLOOK_SELECTED.clear();
   loadOutlook();
 });
 $('#importSource').addEventListener('change', () => {
@@ -2789,6 +3521,248 @@ $('#codexBody').addEventListener('click', async (e) => {
       showToast('已重置');
       loadCodex();
     } catch(err) { showToast('重置失败: ' + err.message); }
+  }
+});
+
+// ---------- 代理管理 ----------
+let PROXY_POOLS = [];
+let PROXY_ACTIVE_POOL = 'jp';
+let PROXY_DIRTY = false;
+let PROXY_REGISTRATION_ROUTE = null;
+
+function currentProxyPool() {
+  return PROXY_POOLS.find(x => x.key === PROXY_ACTIVE_POOL) || PROXY_POOLS[0] || null;
+}
+
+function proxyEditorLines() {
+  return ($('#proxyEditor').value || '').split('\n').map(x => x.trim()).filter(Boolean);
+}
+
+function updateProxyEditorCount() {
+  const pool = currentProxyPool();
+  const count = proxyEditorLines().length;
+  $('#proxyLineCount').textContent = `${count} 条`;
+  $('#proxyLineCount').className = `pill ${pool && count >= Number(pool.min_count) && count <= Number(pool.max_count) ? 'status-success' : 'status-failed'}`;
+  $('#proxyDirtyHint').textContent = PROXY_DIRTY ? '有未保存修改' : '已与服务器同步';
+  $('#proxyDirtyHint').style.color = PROXY_DIRTY ? 'var(--amber)' : 'var(--muted)';
+}
+
+function renderProxyPoolTabs() {
+  $('#proxyPoolTabs').innerHTML = PROXY_POOLS.map(pool => `
+    <button type="button" data-proxy-pool="${esc(pool.key)}" class="${pool.key === PROXY_ACTIVE_POOL ? 'active' : ''}">
+      ${esc(pool.label)} <span class="config-count">${fmt(pool.count)}</span>
+    </button>
+  `).join('');
+}
+
+function renderRegistrationRoute() {
+  const route = PROXY_REGISTRATION_ROUTE || {};
+  const select = $('#registrationRouteSelect');
+  select.innerHTML = `
+    <option value="">请选择注册线路</option>
+    ${PROXY_POOLS.map(pool => `
+      <option value="${esc(pool.key)}" ${Number(pool.count) <= 0 ? 'disabled' : ''} ${route.pool === pool.key ? 'selected' : ''}>
+        ${esc(pool.label)}（${fmt(pool.count)} 条）${Number(pool.count) <= 0 ? '－请先添加代理' : ''}
+      </option>
+    `).join('')}
+  `;
+  const detail = route.local_entry ? ` · ${esc(route.local_entry)}` : '';
+  $('#registrationRouteCurrent').innerHTML = `当前：<b>${esc(route.label || '未配置')}</b>${detail}`;
+  $('#registrationRouteCurrent').style.color = route.legacy ? 'var(--amber)' : 'var(--green)';
+}
+
+function renderActiveProxyPool() {
+  const pool = currentProxyPool();
+  if (!pool) return;
+  PROXY_ACTIVE_POOL = pool.key;
+  renderProxyPoolTabs();
+  renderRegistrationRoute();
+  $('#proxyPoolMeta').innerHTML = `
+    <div>
+      <strong>${esc(pool.label)}</strong>
+      <span class="muted">${esc(pool.description)}</span>
+    </div>
+    <div>本地入口：<span class="mono route">${esc(pool.local_entry)}</span></div>
+  `;
+  $('#proxyEditor').value = (pool.proxies || []).join('\n');
+  PROXY_DIRTY = false;
+  updateProxyEditorCount();
+  $('#proxyManagerBanner').className = 'banner info';
+  $('#proxyManagerBanner').innerHTML = `已读取 <b>${fmt(pool.count)}</b> 条代理。支持 <span class="mono">socks5://</span> 和 <span class="mono">http://</span>，每行一条。`;
+  $('#proxyTestSummary').textContent = '尚未检测';
+  $('#proxyTestBody').innerHTML = '<tr><td colspan="5" class="muted">尚未检测</td></tr>';
+}
+
+async function loadProxyManager() {
+  const banner = $('#proxyManagerBanner');
+  banner.className = 'banner info';
+  banner.textContent = '正在读取 Mihomo 代理池...';
+  try {
+    const response = await api('/api/proxy-manager');
+    PROXY_POOLS = response.pools || [];
+    PROXY_REGISTRATION_ROUTE = response.registration_route || null;
+    if (!PROXY_POOLS.some(x => x.key === PROXY_ACTIVE_POOL)) {
+      PROXY_ACTIVE_POOL = (PROXY_POOLS[0] || {}).key || 'general';
+    }
+    renderActiveProxyPool();
+  } catch(e) {
+    banner.className = 'banner warn';
+    banner.textContent = `读取失败：${e.message}`;
+  }
+}
+
+$('#proxyPoolTabs').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-proxy-pool]');
+  if (!button || button.dataset.proxyPool === PROXY_ACTIVE_POOL) return;
+  if (PROXY_DIRTY && !confirm('当前代理列表有未保存修改，确定切换并放弃吗？')) return;
+  PROXY_ACTIVE_POOL = button.dataset.proxyPool;
+  renderActiveProxyPool();
+});
+
+$('#btnSaveRegistrationRoute').addEventListener('click', async () => {
+  const poolKey = $('#registrationRouteSelect').value;
+  const pool = PROXY_POOLS.find(x => x.key === poolKey);
+  if (!pool) {
+    showToast('请选择一个已有代理的国家池');
+    return;
+  }
+  if (!confirm(`确定把注册线路切换为“${pool.label}”吗？新注册任务将通过 ${pool.local_entry} 使用该池内代理。`)) return;
+  const button = $('#btnSaveRegistrationRoute');
+  button.disabled = true;
+  try {
+    const response = await api('/api/proxy-manager/registration-route', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({pool: pool.key}),
+    });
+    PROXY_REGISTRATION_ROUTE = response.registration_route || null;
+    renderRegistrationRoute();
+    showToast(`注册线路已切换为 ${pool.label}`);
+  } catch(e) {
+    showToast(`切换失败：${e.message}`);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$('#proxyEditor').addEventListener('input', () => {
+  PROXY_DIRTY = true;
+  updateProxyEditorCount();
+});
+
+$('#btnReloadProxyPool').addEventListener('click', async () => {
+  if (PROXY_DIRTY && !confirm('确定放弃当前未保存的修改吗？')) return;
+  await loadProxyManager();
+});
+
+$('#btnSaveProxyPool').addEventListener('click', async () => {
+  const pool = currentProxyPool();
+  const proxies = proxyEditorLines();
+  if (!pool) return;
+  const min = Number(pool.min_count), max = Number(pool.max_count);
+  if (proxies.length < min || proxies.length > max) {
+    showToast(min === max ? `该代理池必须正好 ${min} 条` : `该代理池允许 ${min}–${max} 条`);
+    return;
+  }
+  if (!confirm(`确定保存“${pool.label}”的 ${proxies.length} 条代理并立即热加载 Mihomo 吗？`)) return;
+  const button = $('#btnSaveProxyPool');
+  button.disabled = true;
+  $('#proxyManagerBanner').className = 'banner info';
+  $('#proxyManagerBanner').textContent = '正在校验、备份并热加载 Mihomo...';
+  try {
+    const response = await api('/api/proxy-manager/save', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({pool: pool.key, proxies}),
+    });
+    PROXY_DIRTY = false;
+    $('#proxyManagerBanner').className = 'banner info';
+    $('#proxyManagerBanner').innerHTML = `✅ 已保存并应用 <b>${fmt(response.count)}</b> 条代理，Mihomo 热加载成功。`;
+    showToast('代理池已保存并生效');
+    await loadProxyManager();
+  } catch(e) {
+    $('#proxyManagerBanner').className = 'banner warn';
+    $('#proxyManagerBanner').textContent = `保存失败，原配置已保留：${e.message}`;
+    showToast('代理池保存失败');
+  } finally {
+    button.disabled = false;
+  }
+});
+
+function renderProxyTestResults(response) {
+  const avg = response.average_delay == null ? '-' : `${fmt(response.average_delay)} ms`;
+  const progress = response.total == null
+    ? `共 ${fmt(response.count)} 条`
+    : `${response.done ? '已完成' : '检测中'} ${fmt(response.count)}/${fmt(response.total)} 条`;
+  $('#proxyTestSummary').innerHTML = `
+    ${progress} ·
+    <span style="color:var(--green);font-weight:800;">成功 ${fmt(response.success)}</span> ·
+    <span style="color:${response.failed ? 'var(--red)' : 'var(--green)'};font-weight:800;">失败 ${fmt(response.failed)}</span> ·
+    平均延迟 ${avg}${response.retried ? ` · 重试 ${fmt(response.retried)} 条，恢复 ${fmt(response.recovered || 0)} 条` : ''}
+  `;
+  const rows = response.results || [];
+  $('#proxyTestBody').innerHTML = rows.length ? rows.map(item => `
+    <tr>
+      <td>${fmt(item.index)}</td>
+      <td class="mono">${esc(item.name)}</td>
+      <td><span class="pill ${item.ok ? 'status-success' : 'status-failed'}">${item.ok ? '可用' : '失败'}</span></td>
+      <td>${item.delay == null ? '-' : `${fmt(item.delay)} ms`}</td>
+      <td class="wrap">${esc(item.error || '')}</td>
+    </tr>
+  `).join('') : '<tr><td colspan="5" class="muted">没有检测结果</td></tr>';
+}
+
+$('#btnTestProxyPool').addEventListener('click', async () => {
+  const pool = currentProxyPool();
+  if (!pool) return;
+  if (PROXY_DIRTY) {
+    showToast('请先保存修改，再检测已应用的代理');
+    return;
+  }
+  const button = $('#btnTestProxyPool');
+  button.disabled = true;
+  const rows = [];
+  let offset = 0;
+  let total = pool.count;
+  let retried = 0;
+  let recovered = 0;
+  $('#proxyTestSummary').textContent = `正在排队检测 ${pool.count} 条代理，每批 5 条...`;
+  $('#proxyTestBody').innerHTML = '<tr><td colspan="5" class="muted">等待第一批检测结果...</td></tr>';
+  try {
+    let done = total === 0;
+    while (!done) {
+      const batch = await api('/api/proxy-manager/test-batch', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({pool: pool.key, offset, limit: 5, timeout_ms: 8000}),
+      });
+      rows.push(...(batch.results || []));
+      offset = batch.next_offset;
+      total = batch.total;
+      done = batch.done;
+      retried += batch.retried || 0;
+      recovered += batch.recovered || 0;
+      const success = rows.filter(item => item.ok).length;
+      const delays = rows.filter(item => item.ok && item.delay != null).map(item => Number(item.delay));
+      renderProxyTestResults({
+        count: rows.length,
+        total,
+        done,
+        success,
+        failed: rows.length - success,
+        average_delay: delays.length ? Math.round(delays.reduce((a, b) => a + b, 0) / delays.length) : null,
+        retried,
+        recovered,
+        results: rows,
+      });
+    }
+    const success = rows.filter(item => item.ok).length;
+    showToast(`检测完成：成功 ${success}，失败 ${rows.length - success}`);
+  } catch(e) {
+    $('#proxyTestSummary').textContent = `检测中断：已显示 ${rows.length}/${total} 条；${e.message}`;
+    if (!rows.length) $('#proxyTestBody').innerHTML = `<tr><td colspan="5" class="muted">${esc(e.message)}</td></tr>`;
+  } finally {
+    button.disabled = false;
   }
 });
 
@@ -3238,7 +4212,8 @@ document.addEventListener('click', (e) => {
 // ---------- 初始化 ----------
 loadSummary();
 loadRuntimeResources();
-activateTab(localStorage.getItem('gpt_console_active_tab') || 'register', false);
+initRuntimeResourceBox();
+(function(){var t=location.hash.replace('#','')||window.__INITIAL_TAB||localStorage.getItem('gpt_console_active_tab')||'register';if(!location.hash)history.replaceState({tab:t},'','#'+t);activateTab(t,false,false);})();
 jobsTimer = setInterval(() => { if (!$('#tab-register').classList.contains('hidden')) refreshJobs(); }, 3000);
 setInterval(loadSummary, 5000);
 setInterval(loadRuntimeResources, 2000);

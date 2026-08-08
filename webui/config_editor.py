@@ -54,6 +54,10 @@ EDITABLE_FIELDS = [
         "key": "REGISTRATION_DRIVER", "file": "roxybrowser.py", "type": "str", "group": "注册方式",
         "label": "注册驱动", "help": "默认推荐 roxy；protocol=纯协议，容易封号不建议；roxy=RoxyBrowser；cloak=CloakBrowser；browser_use=Browser Use Cloud+Playwright；skyvern=Skyvern Browser Sessions+Playwright",
     },
+    {
+        "key": "REGISTRATION_CF_AUTO_RETRIES", "file": "register.py", "type": "int", "group": "注册方式",
+        "label": "失败自动重试次数", "help": "Cloudflare 或代理导航失败后自动换线路重试；0=关闭，1=失败后再试一次，最大 10",
+    },
 
     # ---- CloakBrowser ----
     {
@@ -439,10 +443,6 @@ EDITABLE_FIELDS = [
 
     # ---- 代理池 ----
     {
-        "key": "PROXY_POOL", "file": "proxy.py", "type": "list_str_multiline", "group": "代理池",
-        "label": "代理池(每行一个)", "help": "每行一个代理 URL，留空行会被忽略；为空则不使用代理",
-    },
-    {
         "key": "PLAN_CHECK_PROXY_MODE", "file": "proxy.py", "type": "str", "group": "代理池",
         "label": "套餐/Agent网络模式", "help": "用于查套餐和生成 Agent Token；auto=本地代理可用则走代理、未监听则直连；proxy=强制代理；direct=强制直连",
     },
@@ -486,16 +486,20 @@ EDITABLE_FIELDS = [
     # ---- 提链 ----
     {
         "key": "EXTRACT_LINK_API_BASE", "file": "extract_link.py", "type": "str", "group": "提链",
-        "label": "提链服务地址", "help": "填写提链服务 API 地址",
+        "label": "内置UPI服务地址", "help": "注册机内置UPI提链服务地址，默认 https://upi.newzoe.cloud",
+    },
+    {
+        "key": "EXTRACT_LINK_EXTERNAL_IDEAL_API_BASE", "file": "extract_link.py", "type": "str", "group": "提链",
+        "label": "外部荷兰iDEAL地址", "help": "外部iDEAL服务地址，默认 https://ideal.169abc.xyz；CDK由用户提交任务时填写",
     },
     {
         "key": "EXTRACT_LINK_CDK", "file": "extract_link.py", "type": "str", "group": "提链",
-        "label": "提链 CDK", "help": "创建提链任务和监听任务事件使用；成功提链扣 1 次",
+        "label": "内置UPI CDK", "help": "仅供内置UPI渠道使用；外部荷兰iDEAL CDK由用户每次提交任务时填写",
         "storage": "env", "secret": True,
     },
     {
         "key": "EXTRACT_LINK_TYPE", "file": "extract_link.py", "type": "str", "group": "提链",
-        "label": "提链类型", "help": "支持 pix / upi / kakao_pay / ideal",
+        "label": "提链类型", "help": "upi.newzoe.cloud 当前固定为 upi",
     },
     {
         "key": "EXTRACT_LINK_WORKERS", "file": "extract_link.py", "type": "int", "group": "提链",

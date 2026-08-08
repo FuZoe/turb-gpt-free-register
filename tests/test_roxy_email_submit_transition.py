@@ -26,3 +26,24 @@ def test_submit_retry_does_not_refill_after_late_otp_navigation(monkeypatch):
     )
 
     assert reg._submit_email_and_wait_next(FakeDriver(), "user@example.com", attempts=2) == "otp"
+
+
+def test_submit_allows_existing_account_password_only_when_requested(monkeypatch):
+    monkeypatch.setattr(reg, "_email_submit_terminal_state", lambda _driver: "login_password")
+
+    assert reg._submit_email_and_wait_next(
+        FakeDriver(),
+        "user@example.com",
+        allow_login_password=True,
+    ) == "login_password"
+
+
+def test_submit_rejects_existing_account_password_for_registration(monkeypatch):
+    monkeypatch.setattr(reg, "_email_submit_terminal_state", lambda _driver: "login_password")
+
+    try:
+        reg._submit_email_and_wait_next(FakeDriver(), "user@example.com")
+    except RuntimeError as exc:
+        assert "已注册/不可用邮箱" in str(exc)
+    else:
+        raise AssertionError("registration flow must reject an existing account")

@@ -19,6 +19,7 @@ from urllib.parse import urlencode
 import pyotp
 
 from core.session import BrowserSession
+X = 1
 from core.humanize import delay as human_delay
 from core.tenant_context import tenant_path
 
@@ -28,6 +29,46 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _ACCOUNTS_DIR = _PROJECT_ROOT / "accounts"
 _BATCH_ARCHIVE_LOCK = threading.RLock()
+
+_NEXTAUTH_SESSION_COOKIES = ("__Secure-next-auth.session-token", "next-auth.session-token")
+
+
+def inject_session_token(data, cookies):
+    # 把 next-auth 的 session-token cookie 写入 session JSON（字段名 sessionToken）。
+    # /api/auth/session 本身不返回 sessionToken（它存在 httpOnly cookie 里），
+    # 但导入/登录工具需要这个字段。兼容 list[dict] 与带 .jar 的 CookieJar。
+    if not isinstance(data, dict):
+        return data
+    if str(data.get("sessionToken") or "").strip():
+        return data
+
+    token = ""
+    try:
+        for c in cookies or []:
+            if (
+                isinstance(c, dict)
+                and str(c.get("name") or "") in _NEXTAUTH_SESSION_COOKIES
+                and c.get("value")
+            ):
+                token = str(c.get("value"))
+                break
+    except Exception:
+        token = ""
+    if not token:
+        try:
+            for c in cookies.jar:
+                if (
+                    str(getattr(c, "name", "") or "") in _NEXTAUTH_SESSION_COOKIES
+                    and getattr(c, "value", "")
+                ):
+                    token = str(c.value)
+                    break
+        except Exception:
+            token = ""
+    if token:
+        data["sessionToken"] = token
+    return data
+
 
 
 def _accounts_dir() -> Path:
@@ -168,7 +209,7 @@ def fetch_session(session: BrowserSession) -> dict:
     logger.info("[Session] 拉取 ChatGPT session 信息...")
     resp = session.get(url, headers=headers)
     resp.raise_for_status()
-    data = resp.json()
+    data = inject_session_token(resp.json(), session.session.cookies)
 
     if not data.get("accessToken"):
         logger.error(f"[Session] 响应中没有 accessToken: {data}")
@@ -351,18 +392,44 @@ def setup_2fa(session: BrowserSession, email: str, otp_code: str | None = None) 
     logger.info("开始设置 2FA")
     logger.info("=" * 60)
 
-    # 阶段一：重认证
-    reauth_otp_after_ts = time.time()
-    auth_url = _trigger_reauth(session, email)
-    human_delay("api")
-    _follow_reauth(session, auth_url)
-    human_delay("navigate")
+    # 阶段一：重认证。邮箱服务偶尔会继续返回上一封邮件，超时后重新
+    # 触发一次重认证，让服务端重新投递验证码，而不是把整套浏览器流程作废。
+    def _start_reauth() -> float:
+        after_ts = time.time()
+        auth_url = _trigger_reauth(session, email)
+        human_delay("api")
+        _follow_reauth(session, auth_url)
+        human_delay("navigate")
+        return after_ts
+
+    reauth_otp_after_ts = _start_reauth()
 
     if otp_code is None:
         if _email_cfg.USE_EMAIL_SERVICE:
             from core.email_provider import wait_for_otp
-            logger.info("[2FA] 自动等待邮箱重认证 OTP...")
-            otp_code = wait_for_otp(email, after_ts=reauth_otp_after_ts)
+            last_error: Exception | None = None
+            for otp_round in range(1, 4):
+                logger.info("[2FA] 自动等待邮箱重认证 OTP...（%d/3）", otp_round)
+                try:
+                    otp_code = wait_for_otp(
+                        email,
+                        after_ts=reauth_otp_after_ts,
+                        max_wait=60,
+                    )
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    if otp_round >= 3:
+                        raise
+                    logger.warning(
+                        "[2FA] 重认证 OTP 未到，重新触发验证码投递（%d/3）：%s: %s",
+                        otp_round,
+                        type(exc).__name__,
+                        str(exc)[:240],
+                    )
+                    reauth_otp_after_ts = _start_reauth()
+            if otp_code is None and last_error is not None:
+                raise last_error
         else:
             logger.info("")
             logger.info("[2FA] 请检查邮箱，输入新收到的 6 位验证码")

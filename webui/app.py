@@ -10,22 +10,54 @@ Flask 本地控制台。
 所有接口返回 JSON；前端是单文件 templates/index.html（原生 JS + fetch）。
 默认绑定 127.0.0.1，仅本地访问。
 """
+import base64
+import binascii
+import json
 import logging
+import re
 import threading
 import time
 import uuid
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from flask import Flask, Response, jsonify, render_template, request
 
-from core import codex_retry_service, db, plan_check_service, extract_link_service, codex_agent_service
-from webui.auth import configured_tenants, init_auth, register_auth_routes
+from core import (
+    account_task_log,
+    codex_agent_service,
+    codex_retry_service,
+    db,
+    extract_link_service,
+    password_task_service,
+    plan_check_service,
+    twofa_task_service,
+)
+from webui.auth import can_manage_config, can_manage_shared_proxies, configured_tenants, init_auth, register_auth_routes
 from core import registration_service as svc
 from core.tenant_context import current_tenant, tenant_scope
 from webui import config_editor
 from webui.runtime_resources import read_runtime_resources
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_totp_secret(value: str) -> str:
+    raw = str(value or "").strip()
+    if raw.lower().startswith("otpauth://"):
+        parsed = urlparse(raw)
+        if parsed.scheme.lower() != "otpauth" or parsed.netloc.lower() != "totp":
+            raise ValueError("仅支持 otpauth://totp 链接")
+        raw = (parse_qs(parsed.query).get("secret") or [""])[0]
+    secret = re.sub(r"[\s-]+", "", raw).upper().rstrip("=")
+    if not 16 <= len(secret) <= 128 or not re.fullmatch(r"[A-Z2-7]+", secret):
+        raise ValueError("TOTP Secret 必须是 16-128 位 Base32 字符")
+    try:
+        decoded = base64.b32decode(secret + "=" * ((8 - len(secret) % 8) % 8), casefold=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("TOTP Secret 不是有效的 Base32") from exc
+    if len(decoded) < 10:
+        raise ValueError("TOTP Secret 长度过短")
+    return secret
 
 def _pool_source_arg(default: str = "outlook") -> str:
     src = (request.args.get("source") or "").strip()
@@ -96,12 +128,20 @@ def _compact_account_for_list(row: dict) -> dict:
         "user_name", "email_source", "note", "archived", "created_at",
         "plan_type", "current_plan_type", "plus_trial_eligible",
         "plan_check_status", "codex_status", "codex_agent_status",
+        "twofa_task_status", "password_task_status",
     ):
         if key in row:
             out[key] = row.get(key)
 
     if row.get("plan_check_status") in ("queued", "running") or row.get("plan_check_ok") is False:
         out["plan_check_ok"] = row.get("plan_check_ok")
+
+    # Gcash 零元试用资格
+    out["gcash_check_status"] = row.get("gcash_check_status")
+    out["gcash_eligible"] = row.get("gcash_eligible")
+    out["gcash_check_ok"] = row.get("gcash_check_ok")
+    out["gcash_checked_at"] = row.get("gcash_checked_at")
+    out["gcash_error"] = row.get("gcash_error")
 
     # 下面字段仅在有值时返回，避免每行堆满 null/空字符串/内部状态。
     optional_keys = (
@@ -116,6 +156,8 @@ def _compact_account_for_list(row: dict) -> dict:
         # Codex / Agent 状态提示。
         "codex_error", "codex_agent_message", "codex_agent_runtime_id",
         "codex_agent_sub2api_url", "codex_agent_sub2api_mode", "codex_agent_sub2api_total",
+        "twofa_task_message", "twofa_task_error", "twofa_task_proxy_used",
+        "password_task_message", "password_task_error", "password_task_proxy_used",
     )
     for key in optional_keys:
         value = row.get(key)
@@ -142,7 +184,30 @@ def _account_secret_value(row: dict, field: str) -> str:
         return str(row.get("registration_password") or "")
     if field == "codex_agent_token":
         return str(row.get("codex_agent_token") or "")
-    raise ValueError("field 仅支持 access_token/copy_line/credentials_line/registration_password/codex_agent_token")
+    if field == "session":
+        return _account_session_value(row)
+    raise ValueError("field 仅支持 access_token/copy_line/credentials_line/registration_password/codex_agent_token/session")
+
+
+def _account_session_value(row: dict) -> str:
+    """返回注册时保存的 /api/auth/session 原始 JSON（含 sessionToken）。
+
+    不做拼凑：老账号未保存完整 session 时返回空字符串，前端会提示。
+    """
+    extra = {}
+    try:
+        raw_extra = row.get("extra_json") or ""
+        if raw_extra:
+            parsed = json.loads(raw_extra)
+            if isinstance(parsed, dict):
+                extra = parsed
+    except (TypeError, ValueError):
+        extra = {}
+
+    session = extra.get("session")
+    if not isinstance(session, dict) or not session:
+        return ""
+    return json.dumps(session, ensure_ascii=False)
 
 
 def _compact_job_for_list(row: dict) -> dict:
@@ -175,7 +240,7 @@ def _job_status_counts(rows: list[dict]) -> dict:
     return counts
 
 def create_app(auth_code: str | None = None) -> Flask:
-    app = Flask(__name__, template_folder="templates")
+    app = Flask(__name__, template_folder="templates", static_folder="static")
     _prepared_downloads: dict[str, dict] = {}
 
     def _put_prepared_download(content: bytes, filename: str, mimetype: str = "application/zip") -> str:
@@ -222,18 +287,53 @@ def create_app(auth_code: str | None = None) -> Flask:
         with tenant_scope(tenant_id):
             recovered_jobs = svc.recover_interrupted_jobs()
             recovered_plan_checks = db.recover_interrupted_plan_checks()
+            recovered_gcash_checks = db.recover_interrupted_gcash_checks()
             recovered_extract_links = db.recover_interrupted_extract_links()
             recovered_codex_agents = db.recover_interrupted_codex_agents()
-            recovered_total = recovered_jobs + recovered_plan_checks + recovered_extract_links + recovered_codex_agents
+            recovered_twofa_tasks = db.recover_interrupted_twofa_tasks()
+            recovered_password_tasks = db.recover_interrupted_password_tasks()
+            recovered_total = recovered_jobs + recovered_plan_checks + recovered_gcash_checks + recovered_extract_links + recovered_codex_agents + recovered_twofa_tasks + recovered_password_tasks
             if recovered_total:
                 logger.warning("租户 %s 启动时已恢复 %s 个中断状态", tenant_id, recovered_total)
+            gcash_backfill = plan_check_service.enqueue_missing_gcash_checks()
+            if gcash_backfill.get("accepted"):
+                logger.info(
+                    "租户 %s 已自动补检 %s/%s 个历史 free 账号的 Gcash 资格",
+                    tenant_id,
+                    gcash_backfill["accepted"],
+                    gcash_backfill["candidates"],
+                )
 
     # ----------------------------------------------------------
     # 页面
     # ----------------------------------------------------------
+    @app.get("/register")
+    def page_register():
+        return render_template("index.html", tab="register")
+
+    @app.get("/accounts")
+    def page_accounts():
+        return render_template("index.html", tab="accounts")
+
+    @app.get("/codex")
+    def page_codex():
+        return render_template("index.html", tab="codex")
+
+    @app.get("/outlook")
+    def page_outlook():
+        return render_template("index.html", tab="outlook")
+
+    @app.get("/proxies")
+    def page_proxies():
+        return render_template("index.html", tab="proxies")
+
+    @app.get("/config")
+    def page_config():
+        return render_template("index.html", tab="config")
+
     @app.get("/")
     def index():
-        return render_template("index.html")
+        return render_template("index.html", tab="register")
 
     # ----------------------------------------------------------
     # 统计概览
@@ -280,6 +380,9 @@ def create_app(auth_code: str | None = None) -> Flask:
         limit = request.args.get("limit", default=500, type=int)
         archived = str(request.args.get("archived", default="0") or "0").lower()
         plan_filter = str(request.args.get("plan", default="") or "").lower()
+        twofa_filter = str(request.args.get("twofa", default="") or "").lower()
+        password_filter = str(request.args.get("password", default="") or "").lower()
+        codex_filter = str(request.args.get("codex", default="") or "").lower()
         q = str(request.args.get("q", default="") or "").strip()
         # 新分页接口：传 page/page_size 或 paged=1 时返回 {items,total,page,page_size,...}
         paged = str(request.args.get("paged", default="") or "").lower() in {"1", "true", "yes"}
@@ -289,11 +392,28 @@ def create_app(auth_code: str | None = None) -> Flask:
             page = max(1, int(page_arg or 1))
             page_size = max(1, min(500, int(page_size_arg or limit or 50)))
             offset = (page - 1) * page_size
-            result = db.list_accounts_page(limit=page_size, offset=offset, archived=archived, plan_filter=plan_filter, q=q)
+            result = db.list_accounts_page(
+                limit=page_size,
+                offset=offset,
+                archived=archived,
+                plan_filter=plan_filter,
+                q=q,
+                twofa_filter=twofa_filter,
+                password_filter=password_filter,
+                codex_filter=codex_filter,
+            )
             result["items"] = [_compact_account_for_list(r) for r in (result.get("items") or [])]
             result.update({"ok": True, "page": page, "page_size": page_size, "compact": True})
             return jsonify(result)
-        return jsonify(db.list_accounts(limit=limit, archived=archived, plan_filter=plan_filter, q=q))
+        return jsonify(db.list_accounts(
+            limit=limit,
+            archived=archived,
+            plan_filter=plan_filter,
+            q=q,
+            twofa_filter=twofa_filter,
+            password_filter=password_filter,
+            codex_filter=codex_filter,
+        ))
 
     @app.get("/api/accounts/plan-check-status")
     def api_account_plan_check_status():
@@ -301,6 +421,9 @@ def create_app(auth_code: str | None = None) -> Flask:
         limit = request.args.get("limit", default=5000, type=int)
         archived = str(request.args.get("archived", default="0") or "0").lower()
         plan_filter = str(request.args.get("plan", default="") or "").lower()
+        twofa_filter = str(request.args.get("twofa", default="") or "").lower()
+        password_filter = str(request.args.get("password", default="") or "").lower()
+        codex_filter = str(request.args.get("codex", default="") or "").lower()
         q = str(request.args.get("q", default="") or "").strip()
         page_arg = request.args.get("page", default=None, type=int)
         page_size_arg = request.args.get("page_size", default=None, type=int)
@@ -308,10 +431,27 @@ def create_app(auth_code: str | None = None) -> Flask:
             page = max(1, int(page_arg or 1))
             page_size = max(1, min(500, int(page_size_arg or limit or 50)))
             offset = (page - 1) * page_size
-            snapshot = db.list_account_plan_check_statuses(limit=page_size, offset=offset, archived=archived, plan_filter=plan_filter, q=q)
+            snapshot = db.list_account_plan_check_statuses(
+                limit=page_size,
+                offset=offset,
+                archived=archived,
+                plan_filter=plan_filter,
+                q=q,
+                twofa_filter=twofa_filter,
+                password_filter=password_filter,
+                codex_filter=codex_filter,
+            )
             snapshot.update({"page": page, "page_size": page_size})
         else:
-            snapshot = db.list_account_plan_check_statuses(limit=max(1, min(5000, limit)), archived=archived, plan_filter=plan_filter, q=q)
+            snapshot = db.list_account_plan_check_statuses(
+                limit=max(1, min(5000, limit)),
+                archived=archived,
+                plan_filter=plan_filter,
+                q=q,
+                twofa_filter=twofa_filter,
+                password_filter=password_filter,
+                codex_filter=codex_filter,
+            )
         snapshot["queue"] = plan_check_service.queue_settings()
         return jsonify(snapshot)
 
@@ -524,6 +664,193 @@ def create_app(auth_code: str | None = None) -> Flask:
             return jsonify({"ok": False, **queued}), 503
         return jsonify({"ok": True, "started": True, **queued}), 202
 
+    @app.post("/api/accounts/create-2fa")
+    def api_account_create_twofa():
+        """Queue TOTP enrollment for one existing account. Body {account_id|id}."""
+        data = request.get_json(silent=True) or {}
+        acc_id = data.get("account_id") or data.get("id")
+        try:
+            acc = db.get_account(int(acc_id))
+        except Exception:
+            acc = None
+        if not acc:
+            return jsonify({"ok": False, "error": "账号不存在"}), 404
+        if str(acc.get("totp_secret") or "").strip():
+            return jsonify({"ok": False, "error": "该账号已经启用 2FA"}), 409
+        queued = twofa_task_service.enqueue_account_twofa(
+            account_id=int(acc["id"]),
+            email=str(acc.get("email") or ""),
+            trigger="manual",
+        )
+        if queued.get("busy"):
+            return jsonify({"ok": False, **queued}), 409
+        if not queued.get("accepted"):
+            return jsonify({"ok": False, **queued}), 503
+        return jsonify({"ok": True, "started": True, **queued}), 202
+
+    @app.post("/api/accounts/<int:acc_id>/twofa-secret")
+    def api_account_set_twofa_secret(acc_id: int):
+        """Validate and save a manually supplied TOTP Base32 secret or otpauth URI."""
+        acc = db.get_account(acc_id)
+        if not acc:
+            return jsonify({"ok": False, "error": "账号不存在"}), 404
+        if str(acc.get("totp_secret") or "").strip():
+            return jsonify({"ok": False, "error": "该账号已经保存 2FA"}), 409
+        if str(acc.get("twofa_task_status") or "") in {"queued", "running"}:
+            return jsonify({"ok": False, "error": "该账号的自动 2FA 任务正在执行"}), 409
+        data = request.get_json(silent=True) or {}
+        try:
+            secret = _normalize_totp_secret(data.get("secret") or data.get("totp_secret") or "")
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        saved = db.update_account_twofa_task(acc_id, {
+            "ok": True,
+            "status": "success",
+            "totp_secret": secret,
+            "message": "2FA 已手动填写并保存",
+        })
+        if not saved:
+            return jsonify({"ok": False, "error": "保存 2FA 失败"}), 500
+        return jsonify({"ok": True, "message": "2FA 已保存"})
+
+    @app.post("/api/accounts/create-2fa-bulk")
+    def api_accounts_create_twofa_bulk():
+        """Queue TOTP enrollment for selected accounts. Body {account_ids:[...]}"""
+        data = request.get_json(silent=True) or {}
+        ids = data.get("account_ids") or data.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            return jsonify({"ok": False, "error": "account_ids 必须是非空数组"}), 400
+        if len(ids) > 500:
+            return jsonify({"ok": False, "error": "单次最多提交 500 个账号"}), 400
+
+        started = []
+        busy = []
+        failed = []
+        skipped = []
+        seen = set()
+        for raw in ids:
+            try:
+                acc_id = int(raw)
+            except Exception:
+                skipped.append({"id": raw, "reason": "ID 非法"})
+                continue
+            if acc_id in seen:
+                continue
+            seen.add(acc_id)
+            acc = db.get_account(acc_id)
+            if not acc:
+                skipped.append({"id": acc_id, "reason": "账号不存在"})
+                continue
+            email = str(acc.get("email") or "")
+            if str(acc.get("totp_secret") or "").strip():
+                skipped.append({"id": acc_id, "email": email, "reason": "2FA 已启用"})
+                continue
+            queued = twofa_task_service.enqueue_account_twofa(
+                account_id=acc_id,
+                email=email,
+                trigger="manual_bulk",
+            )
+            item = {"id": acc_id, "email": email, **queued}
+            if queued.get("accepted"):
+                started.append(item)
+            elif queued.get("busy"):
+                busy.append(item)
+            else:
+                failed.append(item)
+        return jsonify({
+            "ok": True,
+            "started": started,
+            "started_count": len(started),
+            "busy": busy,
+            "busy_count": len(busy),
+            "failed": failed,
+            "failed_count": len(failed),
+            "skipped": skipped,
+            "skipped_count": len(skipped),
+            "queue": twofa_task_service.queue_settings(),
+        }), 202
+
+    @app.post("/api/accounts/create-password")
+    def api_account_create_password():
+        """Queue password creation for one existing account. Body {account_id|id}."""
+        data = request.get_json(silent=True) or {}
+        acc_id = data.get("account_id") or data.get("id")
+        try:
+            acc = db.get_account(int(acc_id))
+        except Exception:
+            acc = None
+        if not acc:
+            return jsonify({"ok": False, "error": "账号不存在"}), 404
+        if str(acc.get("registration_password") or "").strip():
+            return jsonify({"ok": False, "error": "该账号已有密码"}), 409
+        queued = password_task_service.enqueue_account_password(
+            account_id=int(acc["id"]),
+            email=str(acc.get("email") or ""),
+            trigger="manual",
+        )
+        if queued.get("busy"):
+            return jsonify({"ok": False, **queued}), 409
+        if not queued.get("accepted"):
+            return jsonify({"ok": False, **queued}), 503
+        return jsonify({"ok": True, "started": True, **queued}), 202
+
+    @app.post("/api/accounts/create-password-bulk")
+    def api_accounts_create_password_bulk():
+        """Queue password creation for selected accounts. Body {account_ids:[...]}."""
+        data = request.get_json(silent=True) or {}
+        ids = data.get("account_ids") or data.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            return jsonify({"ok": False, "error": "account_ids 必须是非空数组"}), 400
+        if len(ids) > 500:
+            return jsonify({"ok": False, "error": "单次最多提交 500 个账号"}), 400
+
+        started = []
+        busy = []
+        failed = []
+        skipped = []
+        seen = set()
+        for raw in ids:
+            try:
+                acc_id = int(raw)
+            except Exception:
+                skipped.append({"id": raw, "reason": "ID 非法"})
+                continue
+            if acc_id in seen:
+                continue
+            seen.add(acc_id)
+            acc = db.get_account(acc_id)
+            if not acc:
+                skipped.append({"id": acc_id, "reason": "账号不存在"})
+                continue
+            email = str(acc.get("email") or "")
+            if str(acc.get("registration_password") or "").strip():
+                skipped.append({"id": acc_id, "email": email, "reason": "已有密码"})
+                continue
+            queued = password_task_service.enqueue_account_password(
+                account_id=acc_id,
+                email=email,
+                trigger="manual_bulk",
+            )
+            item = {"id": acc_id, "email": email, **queued}
+            if queued.get("accepted"):
+                started.append(item)
+            elif queued.get("busy"):
+                busy.append(item)
+            else:
+                failed.append(item)
+        return jsonify({
+            "ok": True,
+            "started": started,
+            "started_count": len(started),
+            "busy": busy,
+            "busy_count": len(busy),
+            "failed": failed,
+            "failed_count": len(failed),
+            "skipped": skipped,
+            "skipped_count": len(skipped),
+            "queue": password_task_service.queue_settings(),
+        }), 202
+
     @app.post("/api/accounts/check-plan-bulk")
     def api_accounts_check_plan_bulk():
         """批量把套餐查询加入统一后台队列。Body {account_ids:[...], proxy?, timezone_offset_min?}"""
@@ -593,8 +920,9 @@ def create_app(auth_code: str | None = None) -> Flask:
     def api_extract_link_cdk():
         """查询当前配置或传入 CDK 的剩余次数。"""
         code = (request.args.get("code") or "").strip() or None
+        provider = (request.args.get("provider") or "builtin").strip()
         try:
-            return jsonify({"ok": True, **extract_link_service.query_cdk(cdk=code)})
+            return jsonify({"ok": True, **extract_link_service.query_cdk(cdk=code, provider=provider)})
         except Exception as exc:
             return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 400
 
@@ -625,6 +953,7 @@ def create_app(auth_code: str | None = None) -> Flask:
                 access_token=token,
                 trigger="manual",
                 link_type=data.get("link_type"),
+                provider=data.get("provider"),
                 cdk=data.get("cdk"),
             )
         except Exception as exc:
@@ -678,6 +1007,7 @@ def create_app(auth_code: str | None = None) -> Flask:
                     access_token=token,
                     trigger="manual_bulk",
                     link_type=data.get("link_type"),
+                    provider=data.get("provider"),
                     cdk=data.get("cdk"),
                 )
             except Exception as exc:
@@ -1940,9 +2270,70 @@ def create_app(auth_code: str | None = None) -> Flask:
             "running": codex_retry_service.is_retrying(email),
         })
 
+    @app.get("/api/accounts/task-log")
+    def api_account_task_log():
+        """Read the latest password/2FA background-task log for one account."""
+        task_type = (request.args.get("type") or "").strip().lower()
+        if task_type not in {"password", "twofa"}:
+            return jsonify({"ok": False, "error": "type 仅支持 password/twofa"}), 400
+        try:
+            account_id = int(request.args.get("account_id") or "")
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "account_id 无效"}), 400
+        account = db.get_account(account_id)
+        if not account:
+            return jsonify({"ok": False, "error": "账号不存在"}), 404
+        email = str(account.get("email") or "").strip()
+        status_key = "password_task_status" if task_type == "password" else "twofa_task_status"
+        status = str(account.get(status_key) or "")
+        return jsonify({
+            "ok": True,
+            "account_id": account_id,
+            "email": email,
+            "type": task_type,
+            "status": status,
+            "running": status in {"queued", "running"},
+            "log": account_task_log.read(task_type, email),
+        })
+
     # ----------------------------------------------------------
     # 注册任务
     # ----------------------------------------------------------
+    @app.get("/api/registration/settings")
+    def api_registration_settings_get():
+        return jsonify({
+            "ok": True,
+            "auto_retries": svc.get_auto_retry_limit(),
+            "editable": current_tenant() == "default",
+        })
+
+    @app.post("/api/registration/settings")
+    def api_registration_settings_set():
+        if current_tenant() != "default":
+            return jsonify({"ok": False, "error": "租户账号仅使用管理员共享注册设置"}), 403
+        data = request.get_json(silent=True) or {}
+        try:
+            auto_retries = int(data.get("auto_retries"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "失败自动重试次数需为 0~10 的整数"}), 400
+        if not 0 <= auto_retries <= 10:
+            return jsonify({"ok": False, "error": "失败自动重试次数需在 0~10 之间"}), 400
+
+        try:
+            result = config_editor.update_config({
+                "REGISTRATION_CF_AUTO_RETRIES": auto_retries,
+            })
+            import config as config_pkg
+            config_pkg.reload_all()
+        except Exception as exc:
+            logger.exception("注册失败重试次数写入失败")
+            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 500
+        return jsonify({
+            "ok": True,
+            "auto_retries": svc.get_auto_retry_limit(),
+            "updated": result.get("updated", []),
+        })
+
     @app.get("/api/jobs")
     def api_jobs():
         limit = request.args.get("limit", default=100, type=int)
@@ -2259,17 +2650,114 @@ def create_app(auth_code: str | None = None) -> Flask:
             return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 500
 
     # ----------------------------------------------------------
+    # 代理管理
+    # ----------------------------------------------------------
+    @app.get("/api/proxy-manager")
+    def api_proxy_manager_get():
+        if not can_manage_shared_proxies(current_tenant()):
+            return jsonify({"ok": False, "error": "租户账号不能管理共享代理"}), 403
+        try:
+            from webui.mihomo_proxy_pool import read_all_proxy_pools, registration_route_state
+            return jsonify({
+                "ok": True,
+                "pools": read_all_proxy_pools(),
+                "registration_route": registration_route_state(),
+            })
+        except Exception as exc:
+            logger.exception("读取 Mihomo 代理池失败")
+            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 500
+
+    @app.post("/api/proxy-manager/save")
+    def api_proxy_manager_save():
+        if not can_manage_shared_proxies(current_tenant()):
+            return jsonify({"ok": False, "error": "租户账号不能管理共享代理"}), 403
+        data = request.get_json(silent=True) or {}
+        pool_key = str(data.get("pool") or "").strip()
+        proxies = data.get("proxies")
+        if isinstance(proxies, str):
+            proxies = [line.strip() for line in proxies.splitlines() if line.strip()]
+        if not isinstance(proxies, list):
+            return jsonify({"ok": False, "error": "proxies 必须是代理 URL 列表"}), 400
+        try:
+            from webui.mihomo_proxy_pool import update_proxy_pool
+            result = update_proxy_pool(pool_key, proxies)
+            return jsonify({"ok": True, **result})
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except Exception as exc:
+            logger.exception("保存 Mihomo 代理池失败")
+            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 500
+
+    @app.post("/api/proxy-manager/test")
+    def api_proxy_manager_test():
+        if not can_manage_shared_proxies(current_tenant()):
+            return jsonify({"ok": False, "error": "租户账号不能检测共享代理"}), 403
+        data = request.get_json(silent=True) or {}
+        pool_key = str(data.get("pool") or "").strip()
+        try:
+            from webui.mihomo_proxy_pool import test_proxy_pool
+            result = test_proxy_pool(
+                pool_key,
+                timeout_ms=int(data.get("timeout_ms") or 8000),
+            )
+            return jsonify({"ok": True, **result})
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except Exception as exc:
+            logger.exception("检测 Mihomo 代理池失败")
+            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 500
+
+    @app.post("/api/proxy-manager/test-batch")
+    def api_proxy_manager_test_batch():
+        if not can_manage_shared_proxies(current_tenant()):
+            return jsonify({"ok": False, "error": "租户账号不能检测共享代理"}), 403
+        data = request.get_json(silent=True) or {}
+        pool_key = str(data.get("pool") or "").strip()
+        try:
+            from webui.mihomo_proxy_pool import test_proxy_pool_batch
+            result = test_proxy_pool_batch(
+                pool_key,
+                offset=int(data.get("offset") or 0),
+                limit=int(data.get("limit") or 5),
+                timeout_ms=int(data.get("timeout_ms") or 8000),
+            )
+            return jsonify({"ok": True, **result})
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except Exception as exc:
+            logger.exception("分批检测 Mihomo 代理池失败")
+            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 500
+
+    @app.post("/api/proxy-manager/registration-route")
+    def api_proxy_manager_registration_route():
+        if not can_manage_shared_proxies(current_tenant()):
+            return jsonify({"ok": False, "error": "租户账号不能切换注册线路"}), 403
+        data = request.get_json(silent=True) or {}
+        pool_key = str(data.get("pool") or "").strip()
+        try:
+            from webui.mihomo_proxy_pool import select_registration_pool
+            route = select_registration_pool(pool_key)
+            return jsonify({"ok": True, "registration_route": route})
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except Exception as exc:
+            logger.exception("切换注册线路失败")
+            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 500
+
+    # ----------------------------------------------------------
     # 配置读写
     # ----------------------------------------------------------
     @app.get("/api/config")
     def api_config_get():
-        if current_tenant() != "default":
-            return jsonify({"ok": False, "error": "租户账号仅使用管理员共享配置"}), 403
+        if not can_manage_config(current_tenant()):
+            return jsonify({"ok": False, "error": "租户账号不能读取共享配置"}), 403
         return jsonify(config_editor.get_config())
 
     @app.post("/api/cloudmail/gen-token")
     def api_cloudmail_gen_token():
         """手动生成 CloudMail Authorization Token，并把本次填写的 CloudMail 配置一并写入 .env。"""
+        if not can_manage_config(current_tenant()):
+            return jsonify({"ok": False, "error": "租户账号不能修改共享配置"}), 403
         data = request.get_json(silent=True) or {}
         try:
             from core.cloudmail_client import gen_token
@@ -2315,6 +2803,8 @@ def create_app(auth_code: str | None = None) -> Flask:
     @app.post("/api/cloudmail/domains")
     def api_cloudmail_domains():
         """从 CloudMail 平台获取域名列表，并可写入 .env 作为本地缓存。"""
+        if not can_manage_config(current_tenant()):
+            return jsonify({"ok": False, "error": "租户账号不能修改共享配置"}), 403
         data = request.get_json(silent=True) or {}
         try:
             from core.cloudmail_client import fetch_domains
@@ -2358,8 +2848,8 @@ def create_app(auth_code: str | None = None) -> Flask:
 
     @app.post("/api/config")
     def api_config_set():
-        if current_tenant() != "default":
-            return jsonify({"ok": False, "error": "租户账号仅使用管理员共享配置"}), 403
+        if not can_manage_config(current_tenant()):
+            return jsonify({"ok": False, "error": "租户账号不能修改共享配置"}), 403
         data = request.get_json(silent=True) or {}
         updates = data.get("updates") if isinstance(data.get("updates"), dict) else data
         if not isinstance(updates, dict) or not updates:

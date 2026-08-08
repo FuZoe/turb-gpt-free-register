@@ -12,8 +12,10 @@ import json
 import logging
 import re
 import time
+import base64
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 
@@ -26,6 +28,7 @@ logger = logging.getLogger(__name__)
 _CODE_REGEX = re.compile(r"\b(\d{6})\b")
 _CONTEXT_WORDS = ("code", "verify", "verification", "验证码", "代码", "确认码", "認証", "コード")
 _CONTEXT_CACHE: dict[object, "GenericApiEmailAccount"] = {}
+_LAST_RETURNED_OTP: dict[object, str] = {}
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _ACCOUNTS_FILE = _PROJECT_ROOT / "用于注册的API邮箱.txt"
 
@@ -93,6 +96,78 @@ def _extract_code(text: str) -> str | None:
     return None
 
 
+def _decode_message_body(value: object) -> str:
+    """Decode a mailbox detail body's data URL while keeping plain HTML/text intact."""
+    text = str(value or "")
+    if not text.startswith("data:") or "," not in text:
+        return text
+    metadata, payload = text.split(",", 1)
+    try:
+        if ";base64" in metadata.lower():
+            return base64.b64decode(payload).decode("utf-8", errors="ignore")
+    except Exception:
+        logger.debug("[GenericAPI] 邮件详情 data URL 解码失败", exc_info=True)
+    return payload
+
+
+def _extract_detail_otp(
+    base_url: str,
+    listing_html: str,
+    headers: dict[str, str],
+    after_ts: float | None,
+) -> str | None:
+    """Read the newest message detail from HTML mailbox viewers such as yangyang.website."""
+    route = re.search(
+        r"var\s+detailBase=['\"]([^'\"]+)['\"];\s*var\s+detailSuffix=['\"]([^'\"]+)['\"]",
+        listing_html,
+    )
+    if not route:
+        return None
+    detail_base, detail_suffix = route.groups()
+    message_ids: list[str] = []
+    item_pattern = re.compile(
+        r'<a\b[^>]*data-id=["\']([0-9]+)["\'][^>]*>(.*?)</a>',
+        re.IGNORECASE | re.DOTALL,
+    )
+    matched_items = False
+    for item in item_pattern.finditer(listing_html):
+        matched_items = True
+        message_id, fragment = item.groups()
+        time_match = re.search(r'class=["\']time["\'][^>]*>([^<]+)<', fragment, re.IGNORECASE)
+        if after_ts and time_match:
+            try:
+                received_epoch = time.mktime(time.strptime(time_match.group(1).strip(), "%Y-%m-%d %H:%M:%S"))
+                if received_epoch + 2.0 < float(after_ts):
+                    continue
+            except (TypeError, ValueError, OverflowError):
+                pass
+        message_ids.append(message_id)
+    if not matched_items:
+        message_ids = re.findall(r'data-id=["\']([0-9]+)["\']', listing_html)
+    if not message_ids:
+        return None
+    parsed = urlsplit(base_url)
+    origin = urlunsplit((parsed.scheme, parsed.netloc, "", "", ""))
+    detail_headers = {**headers, "Accept": "application/json"}
+    for message_id in message_ids[:8]:
+        detail_url = f"{origin}{detail_base}{message_id}{detail_suffix}"
+        try:
+            detail_resp = requests.get(detail_url, headers=detail_headers, timeout=12, verify=False)
+            if detail_resp.status_code != 200:
+                continue
+            payload = detail_resp.json()
+            if not isinstance(payload, dict):
+                continue
+            body = _decode_message_body(payload.get("body") or payload.get("html") or payload.get("text"))
+            code = _extract_code(json.dumps({"subject": payload.get("subject", ""), "html": body}, ensure_ascii=False))
+            if code:
+                logger.info("[GenericAPI] 从邮件详情提取 OTP=%s message_id=%s", code, message_id)
+                return code
+        except Exception as exc:
+            logger.debug("[GenericAPI] 邮件详情读取失败 id=%s: %s", message_id, exc)
+    return None
+
+
 def pick_account() -> GenericApiEmailAccount:
     """领取一个可用通用 API 邮箱。"""
     from core.db import claim_next_generic_api_email, generic_api_email_pool_summary
@@ -150,7 +225,9 @@ def get_account_context(email: str) -> GenericApiEmailAccount | None:
 def release_account(email: str, status: str = "available", note: str | None = None) -> None:
     from core.db import release_generic_api_email
     release_generic_api_email(email, status=status, note=note)
-    _CONTEXT_CACHE.pop(_cache_key(email), None)
+    key = _cache_key(email)
+    _CONTEXT_CACHE.pop(key, None)
+    _LAST_RETURNED_OTP.pop(key, None)
 
 
 def fetch_latest_otp(
@@ -171,6 +248,8 @@ def fetch_latest_otp(
     if account is None:
         raise GenericApiMailError(f"通用 API 邮箱不存在或未导入: {email}")
 
+    cache_key = _cache_key(email)
+    previous_otp = _LAST_RETURNED_OTP.get(cache_key)
     deadline = time.time() + (max_wait or _email_cfg.OTP_MAX_WAIT)
     interval = poll_interval or _email_cfg.OTP_POLL_INTERVAL
     settle = settle_seconds if settle_seconds is not None else _email_cfg.OTP_SETTLE_SECONDS
@@ -193,9 +272,17 @@ def fetch_latest_otp(
             text = resp.text or ""
             if resp.status_code == 200:
                 code = _extract_code(text)
+                if not code:
+                    code = _extract_detail_otp(account.code_url, text, headers, after_ts)
                 if code:
                     now_seen = time.time()
-                    if not best_otp:
+                    if code == previous_otp and not best_otp:
+                        last_error = f"取码接口仍返回上次已消费的 OTP={code}"
+                        logger.info(
+                            "[GenericAPI] 仍是上次已消费的 OTP=%s，等待新验证码...",
+                            code,
+                        )
+                    elif not best_otp:
                         best_otp = code
                         best_seen_at = now_seen
                         settle_until = now_seen + settle
@@ -226,6 +313,7 @@ def fetch_latest_otp(
                 f"[GenericAPI] settle 完成，返回 OTP={best_otp}, "
                 f"候选锁定时间={time.strftime('%H:%M:%S', time.localtime(best_seen_at))}"
             )
+            _LAST_RETURNED_OTP[cache_key] = best_otp
             return best_otp
 
         remaining = int(deadline - now)
@@ -243,6 +331,7 @@ def fetch_latest_otp(
 
     if best_otp:
         logger.warning(f"[GenericAPI] 总超时但已有候选，返回 OTP={best_otp}")
+        _LAST_RETURNED_OTP[cache_key] = best_otp
         return best_otp
 
     raise GenericApiMailError(f"等待通用 API 验证码超时: {email}; {last_error}")

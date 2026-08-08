@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 
 from config import roxybrowser as _cfg
 from config import twofa as _twofa_cfg
-from core.account_export import save_account_data
+from core.account_export import inject_session_token, save_account_data
 from core.email_provider import wait_for_otp, resolve_email_source
 from core.humanize import delay as human_delay
 from core.roxybrowser_client import RoxyBrowserClient, RoxyOpenResult
@@ -153,6 +153,76 @@ _EMAIL_INPUT_SELECTORS = [
 ]
 
 
+class CloudflareChallengeError(RuntimeError):
+    """OpenAI auth flow was replaced by a Cloudflare verification page."""
+
+
+def _is_cloudflare_challenge_state(state: dict | None) -> bool:
+    state = state or {}
+    url = str(state.get('url') or '').lower()
+    text = ' '.join((
+        str(state.get('title') or ''),
+        str(state.get('text') or ''),
+    )).lower()
+    return (
+        '/cdn-cgi/challenge' in url
+        or 'challenges.cloudflare.com' in url
+        or 'ray id:' in text
+        or ('cloudflare' in text and any(x in text for x in ('security', 'verify', 'challenge', '検証', '验证')))
+        or any(x in text for x in (
+            'security verification', 'performing security verification', 'just a moment',
+            'セキュリティ検証', 'しばらくお待ちください',
+            '安全验证', '安全性验证', '正在验证',
+        ))
+    )
+
+
+def is_cloudflare_challenge_error(error: object) -> bool:
+    text = str(error or '').lower()
+    return 'cloudflarechallengeerror' in text or 'cloudflare challenge/403' in text
+
+
+def _raise_if_cloudflare_challenge(driver, state: dict | None = None) -> None:
+    state = state or _email_entry_state(driver)
+    if _is_cloudflare_challenge_state(state):
+        raise CloudflareChallengeError(
+            f"Cloudflare challenge/403 阻断认证页: url={state.get('url')} title={state.get('title')}"
+        )
+    _raise_if_cloudflare_network_failure(driver)
+
+
+def _raise_if_cloudflare_network_failure(driver) -> None:
+    """识别页面未显示验证文案、但关键认证请求已被 403 冻结的场景。"""
+    snapshot_fn = getattr(driver, 'diagnostic_snapshot', None)
+    if not callable(snapshot_fn):
+        return
+    try:
+        snapshot = snapshot_fn() or {}
+    except Exception:
+        return
+    errors = snapshot.get('http_errors') or []
+    blocked = []
+    critical_paths = (
+        '/api/auth/signin/openai',
+        '/api/accounts/authorize',
+        '/backend-anon/me',
+        '/cdn-cgi/challenge-platform/',
+    )
+    for item in errors:
+        url = str(item.get('url') or '')
+        try:
+            status = int(item.get('status') or 0)
+        except (TypeError, ValueError):
+            status = 0
+        if status == 403 and any(path in url for path in critical_paths):
+            blocked.append(url)
+    if blocked:
+        current = str((snapshot.get('page') or {}).get('url') or getattr(driver, 'current_url', '') or '')
+        raise CloudflareChallengeError(
+            f"Cloudflare challenge/403 阻断认证请求: page={current} blocked={blocked[-3:]}"
+        )
+
+
 def _email_entry_state(driver) -> dict:
     try:
         return driver.execute_script(r"""
@@ -171,7 +241,7 @@ def _email_entry_state(driver) -> dict:
         })).slice(0, 30);
         const actions = [...document.querySelectorAll('button,a,[role=button],input[type=button],input[type=submit]')]
           .filter(visible).map(el => ({tag: el.tagName, type: el.getAttribute('type') || '', attrs: attrText(el)})).slice(0, 40);
-        return {url: location.href, title: document.title, inputs, actions};
+        return {url: location.href, title: document.title, text: (document.body?.innerText || '').slice(0, 1600), inputs, actions};
         """) or {}
     except Exception as exc:
         return {"url": getattr(driver, "current_url", ""), "error": f"{type(exc).__name__}: {exc}"}
@@ -288,6 +358,7 @@ def _type_email_address(driver, email: str, timeout: int | None = None) -> None:
             _set_element_value(driver, el, email)
             return
         last_state = _email_entry_state(driver)
+        _raise_if_cloudflare_challenge(driver, last_state)
         if not clicked_email_option and _click_email_entry_option(driver):
             clicked_email_option = True
             time.sleep(1.0)
@@ -418,6 +489,44 @@ def _email_submit_terminal_state(driver) -> str | None:
     return None
 
 
+def _handle_auth_challenge_if_present(driver) -> dict:
+    """Move passkey/auth-choice interstitials toward the email OTP route."""
+    try:
+        url = str(driver.current_url or '').lower()
+    except Exception:
+        url = ''
+    if '/auth_challenge' not in url:
+        return {"handled": False, "reason": "not_auth_challenge"}
+    result = driver.execute_script(r"""
+    const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+      && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none'
+      && !el.disabled && String(el.getAttribute('aria-disabled') || '').toLowerCase() !== 'true';
+    const candidates = [...document.querySelectorAll('a,button,input[type="submit"],[role="button"],[role="link"]')].filter(visible);
+    const describe = el => [
+      el.textContent, el.getAttribute('aria-label'), el.getAttribute('title'), el.getAttribute('href'),
+      el.getAttribute('name'), el.getAttribute('value'), el.id, el.className
+    ].join(' ').replace(/\s+/g, ' ').trim();
+    const rows = candidates.map(el => ({el, raw: describe(el), text: describe(el).toLowerCase()}));
+    const another = rows.find(x =>
+      /try another way|another way|other (way|method)|別の方法|その他の方法|別の方法を試す|其他方式|换一种方式/.test(x.text)
+      || /\/auth_challenge\/?(?:$|[?#])/.test(String(x.el.getAttribute('href') || ''))
+    );
+    const emailOtp = rows.find(x =>
+      !/passkey|security key|password|google|apple/.test(x.text)
+      && /one[- ]?time|email.{0,20}(code|otp)|(?:code|otp).{0,20}email|メール.{0,12}(コード|認証)|電子メール|邮箱|郵箱|验证码|驗證碼/.test(x.text)
+    );
+    const target = emailOtp || another;
+    if (!target) return {handled:false, reason:'missing_auth_alternative', actions:rows.slice(0,12).map(x => x.raw.slice(0,180))};
+    target.el.scrollIntoView({block:'center'});
+    target.el.click();
+    return {handled:true, reason:emailOtp ? 'clicked_email_otp' : 'clicked_another_way', target:target.raw.slice(0,180)};
+    """) or {}
+    if result.get("handled"):
+        logger.info("%s 已处理登录挑战页：%s", _log_prefix(driver), result)
+        time.sleep(1.0)
+    return result
+
+
 def _wait_email_submit_next_state(driver, email: str, timeout: int = 18) -> str:
     """邮箱提交后等待进入 password / otp / logged_in；仍停留邮箱页则返回 email_page。
 
@@ -434,6 +543,8 @@ def _wait_email_submit_next_state(driver, email: str, timeout: int = 18) -> str:
     cleared_last_log_at = 0.0
     expected_email = str(email or "").strip().lower()
     while time.time() < end:
+        _raise_if_cloudflare_challenge(driver)
+        _handle_auth_challenge_if_present(driver)
         terminal_state = _email_submit_terminal_state(driver)
         if terminal_state:
             return terminal_state
@@ -472,7 +583,13 @@ def _wait_email_submit_next_state(driver, email: str, timeout: int = 18) -> str:
     return "email_page" if _is_email_login_page_still_present(driver) else "unknown"
 
 
-def _submit_email_and_wait_next(driver, email: str, attempts: int = 3) -> str:
+def _submit_email_and_wait_next(
+    driver,
+    email: str,
+    attempts: int = 3,
+    *,
+    allow_login_password: bool = False,
+) -> str:
     """填写并提交邮箱，必须确认进入 password/otp/logged_in 才返回。"""
     last_state = None
     for attempt in range(1, attempts + 1):
@@ -480,6 +597,9 @@ def _submit_email_and_wait_next(driver, email: str, attempts: int = 3) -> str:
         terminal_state = _email_submit_terminal_state(driver)
         if terminal_state:
             if terminal_state == "login_password":
+                if allow_login_password:
+                    logger.info("%s 已有账号登录流程进入密码页", _log_prefix(driver))
+                    return terminal_state
                 raise RuntimeError(f"邮箱提交后进入登录密码页，按已注册/不可用邮箱处理并停用: url={getattr(driver, 'current_url', '') or 'https://auth.openai.com/log-in/password'}")
             logger.info("%s 重试前检测到页面已进入下一步：%s", _log_prefix(driver), terminal_state)
             return terminal_state
@@ -497,6 +617,9 @@ def _submit_email_and_wait_next(driver, email: str, attempts: int = 3) -> str:
         logger.info("%s 已提交邮箱，等待进入密码页或验证码页（%s/%s）", _log_prefix(driver), attempt, attempts)
         state_name = _wait_email_submit_next_state(driver, email, timeout=20)
         if state_name == "login_password":
+            if allow_login_password:
+                logger.info("%s 已有账号登录流程进入密码页", _log_prefix(driver))
+                return state_name
             raise RuntimeError(f"邮箱提交后进入登录密码页，按已注册/不可用邮箱处理并停用: url={getattr(driver, 'current_url', '') or 'https://auth.openai.com/log-in/password'}")
         if state_name in ("password", "otp", "logged_in"):
             logger.info("%s 邮箱提交后已进入下一步：%s", _log_prefix(driver), state_name)
@@ -511,6 +634,7 @@ def _type_otp(driver, code: str, timeout: int = 20) -> None:
 
     end = time.time() + timeout
     while time.time() < end:
+        _raise_if_cloudflare_challenge(driver, _email_otp_page_state(driver))
         # URL 已进入 email-verification 时 DOM 仍可能处于 loading，等待输入框真正挂载。
         for selector in [
             "input[autocomplete='one-time-code']",
@@ -609,6 +733,7 @@ def _click_resend_email_otp(driver, timeout: int = 20) -> dict:
     end = time.time() + timeout
     last = None
     while time.time() < end:
+        _raise_if_cloudflare_challenge(driver, _email_otp_page_state(driver))
         try:
             btn = driver.execute_script(r"""
             const visible = el => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
@@ -647,11 +772,17 @@ def _wait_after_email_otp_submit(driver, timeout: int = 10) -> str:
     last = {}
     while time.time() < end:
         time.sleep(0.5)
+        _raise_if_cloudflare_challenge(driver, _email_otp_page_state(driver))
         if not _is_email_verification_page(driver):
             return 'accepted'
         last = _email_otp_page_state(driver)
         invalid = any(str(i.get('ariaInvalid') or '').lower() == 'true' for i in (last.get('inputs') or []))
-        if invalid or (last.get('errors') or []):
+        body_text = str(last.get('text') or '').lower()
+        error_hit = any(x in body_text for x in (
+            'invalid code', 'incorrect code', 'wrong code', 'expired',
+            '验证码错误', '验证码无效', '验证码已过期', 'コードが正しく', '無効', '期限',
+        ))
+        if invalid or error_hit:
             return 'invalid'
     if _is_email_verification_page(driver):
         logger.warning("%s[OTP] 提交后仍停留验证码页，按验证码无效/过期处理 snapshot=%s", _log_prefix(driver), _email_otp_page_state(driver))
@@ -714,6 +845,14 @@ def _page_snapshot(driver) -> dict:
 
 
 def _has_access_token(driver) -> bool:
+    try:
+        current = str(getattr(driver, 'current_url', '') or '').lower()
+    except Exception:
+        current = ''
+    # Calling chatgpt.com from an auth.openai.com page is blocked by CORS and
+    # only produces misleading request failures in diagnostics.
+    if 'chatgpt.com' not in current or 'auth.openai.com' in current:
+        return False
     try:
         result = driver.execute_async_script(r"""
         const done = arguments[0];
@@ -1002,9 +1141,16 @@ def _password_page_state(driver) -> dict:
         const forms = [...document.querySelectorAll('form')].map(f => ({action: f.getAttribute('action') || ''}));
         const buttons = [...document.querySelectorAll('button,input[type="submit"]')].map(el => ({
           type: el.getAttribute('type') || '', name: el.getAttribute('name') || '', id: el.id || '',
+          value: el.getAttribute('value') || el.value || '',
+          text: String(el.textContent || el.getAttribute('aria-label') || '').trim().slice(0, 160),
           disabled: !!el.disabled, visible: !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
         })).slice(0, 30);
-        return {url: location.href, inputs, forms, buttons};
+        const actions = [...document.querySelectorAll('a,[role="link"]')].map(el => ({
+          href: el.getAttribute('href') || '',
+          text: String(el.textContent || el.getAttribute('aria-label') || '').trim().slice(0, 160),
+          visible: !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+        })).slice(0, 30);
+        return {url: location.href, inputs, forms, buttons, actions};
         """) or {}
     except Exception as exc:
         return {"url": getattr(driver, "current_url", ""), "error": f"{type(exc).__name__}: {exc}"}
@@ -1025,6 +1171,17 @@ def _is_signup_password_page(driver) -> bool:
             or str(i.get('autocomplete') or '').lower() == 'new-password'
         )
         for i in inputs
+    )
+
+
+def _has_visible_password_input(state: dict | None) -> bool:
+    return any(
+        item.get('visible') and (
+            str(item.get('type') or '').lower() == 'password'
+            or 'password' in str(item.get('name') or '').lower()
+            or str(item.get('autocomplete') or '').lower() == 'new-password'
+        )
+        for item in ((state or {}).get('inputs') or [])
     )
 
 
@@ -1063,6 +1220,7 @@ def _click_passwordless_signup_if_present(driver) -> dict:
           return (
             (name === 'intent' && value.includes('passwordless') && value.includes('send_otp')) ||
             (name === 'intent' && value.includes('passwordless') && value.includes('otp')) ||
+            (name === 'intent' && /(^|[-_])(email[-_]?)?(otp|one[-_]?time[-_]?code|email[-_]?code)([-_]|$)/.test(value)) ||
             (name === 'intent' && value === 'passwordless_signup_send_otp') ||
             (name === 'intent' && value === 'passwordless_login_send_otp') ||
             attrs.includes('passwordless_signup_send_otp') ||
@@ -1162,7 +1320,9 @@ def _fill_password_page_if_present(driver, email: str, timeout: int = 25, *, pre
     """邮箱提交后兼容 create-account/password。返回本次设置的 OpenAI 账号密码；未遇到密码页返回 None。"""
     end = time.time() + timeout
     last = {}
+    saw_signup_password_url = False
     while time.time() < end:
+        _raise_if_cloudflare_challenge(driver)
         if _is_email_verification_page(driver):
             return None
         if _has_access_token(driver):
@@ -1173,6 +1333,14 @@ def _fill_password_page_if_present(driver, email: str, timeout: int = 25, *, pre
         if not (is_signup_password or is_login_password):
             time.sleep(0.5)
             continue
+        if is_signup_password:
+            saw_signup_password_url = True
+            # The URL changes before React mounts the password form. An empty
+            # loading DOM is a transition state, not a terminal missing-input error.
+            if not _has_visible_password_input(last):
+                _raise_if_cloudflare_network_failure(driver)
+                time.sleep(0.5)
+                continue
         passwordless = {} if prefer_password else _click_passwordless_signup_if_present(driver)
         if passwordless.get('ok'):
             logger.info("%s 检测到 password 页，已点击一次性验证码入口：email=%s detail=%s", _log_prefix(driver), email, passwordless)
@@ -1274,6 +1442,8 @@ def _fill_password_page_if_present(driver, email: str, timeout: int = 25, *, pre
                     return password
                 time.sleep(0.5)
         raise RuntimeError(f"密码提交后等待页面跳转超时，仍停留在密码页: state={_password_page_state(driver)}")
+    if saw_signup_password_url:
+        raise RuntimeError(f"密码页 URL 已出现但表单在 {timeout}s 内未完成加载: state={last}")
     logger.info("%s 未检测到密码页，继续后续流程 last=%s", _log_prefix(driver), last)
     return None
 
@@ -1336,13 +1506,16 @@ def _accept_profile_consents(driver) -> int:
 
 
 def _complete_profile_page(driver, name: str, birthday: str, timeout: int = 45) -> bool:
-    """等待并完成姓名/生日页；若已经登录成功则返回 False，不把它当失败。"""
+    """填写资料并确认真正离开 about-you；停留时自动重提。"""
     end = time.time() + timeout
     y, m, d = birthday.split('-')
     from datetime import date
     today = date.today()
     age = today.year - int(y) - ((today.month, today.day) < (int(m), int(d)))
     last_snapshot = {}
+    submitted = False
+    last_submit_at = 0.0
+    last_wait_log = 0.0
     while time.time() < end:
         time.sleep(1)
         if _has_access_token(driver):
@@ -1350,11 +1523,30 @@ def _complete_profile_page(driver, name: str, birthday: str, timeout: int = 45) 
             return False
         snap = _page_snapshot(driver)
         last_snapshot = snap
+        _raise_if_cloudflare_challenge(driver, snap)
+        current_url = str(snap.get('url') or '').lower()
+        if 'chatgpt.com' in current_url and 'auth.openai.com' not in current_url:
+            logger.info('%s 资料页提交完成并已进入 ChatGPT：%s', _log_prefix(driver), snap.get('url'))
+            return True
         if not _is_profile_like(snap):
-            logger.info('%s 等待资料页中：url=%s', _log_prefix(driver), snap.get('url'))
+            if time.time() - last_wait_log >= 3:
+                logger.info('%s 等待资料页跳转/登录态同步：url=%s', _log_prefix(driver), snap.get('url'))
+                last_wait_log = time.time()
             continue
 
-        logger.info('%s 检测到资料页，开始填写姓名生日：url=%s inputs=%s', _log_prefix(driver), snap.get('url'), snap.get('inputs'))
+        if submitted and time.time() - last_submit_at < 6:
+            if time.time() - last_wait_log >= 3:
+                logger.info('%s 资料页已提交但仍未跳转，继续等待：url=%s', _log_prefix(driver), snap.get('url'))
+                last_wait_log = time.time()
+            continue
+
+        logger.info(
+            '%s %s资料页，开始填写姓名生日：url=%s inputs=%s',
+            _log_prefix(driver),
+            '重新提交' if submitted else '检测到',
+            snap.get('url'),
+            snap.get('inputs'),
+        )
         name_ok = False
         # 常见单姓名字段
         for selectors in [
@@ -1391,9 +1583,14 @@ def _complete_profile_page(driver, name: str, birthday: str, timeout: int = 45) 
         for _ in range(3):
             if _click_if_enabled_submit(driver):
                 logger.info('%s 已点击资料页提交按钮，等待 OAuth 跳转', _log_prefix(driver))
-                return True
+                submitted = True
+                last_submit_at = time.time()
+                break
             time.sleep(1)
-        logger.warning('%s 找不到可点击的资料页提交按钮 snapshot=%s', _log_prefix(driver), _page_snapshot(driver))
+        else:
+            logger.warning('%s 找不到可点击的资料页提交按钮 snapshot=%s', _log_prefix(driver), _page_snapshot(driver))
+    if submitted and _is_profile_like(last_snapshot):
+        raise RuntimeError(f'资料页提交后仍未跳转，已停止后续 session 读取；最后页面：{last_snapshot}')
     raise RuntimeError(f'等待/填写资料页超时，最后页面：{last_snapshot}')
 
 
@@ -1448,6 +1645,10 @@ def _read_chatgpt_session_once(driver) -> dict | None:
     if result and result.get("ok"):
         data = result.get("data") or {}
         if data.get("accessToken"):
+            try:
+                data = inject_session_token(data, driver.get_cookies())
+            except Exception:
+                pass
             logger.info("%s /api/auth/session 已返回 accessToken", _log_prefix(driver))
             return data
         logger.info("%s 等待 ChatGPT session 写入 accessToken，当前响应 keys=%s", _log_prefix(driver), list(data.keys()))
@@ -1501,6 +1702,13 @@ def _fetch_chatgpt_session(driver, timeout: int = 90, auto_jump_wait: int = 15) 
         if 'chatgpt.com' not in current:
             if _switch_to_chatgpt_window_if_any(driver):
                 current = str(getattr(driver, "current_url", "") or "")
+            elif any(x in current.lower() for x in ('about-you', 'profile', 'signup/profile', 'create-account')):
+                # Never abandon an unfinished auth form by navigating away. The
+                # previous behavior turned a recoverable profile-submit issue
+                # into an anonymous ChatGPT page and a 90-second token timeout.
+                last_data = f"仍在认证资料页: {current}"
+                time.sleep(1)
+                continue
             elif time.time() >= auto_jump_end and not forced_chatgpt_open:
                 try:
                     logger.info("%s 未在 %ss 内观察到当前窗口跳转 chatgpt.com，主动打开 ChatGPT 内读取 session", _log_prefix(driver), int(auto_jump_wait or 15))
@@ -1524,7 +1732,14 @@ def _fetch_chatgpt_session(driver, timeout: int = 90, auto_jump_wait: int = 15) 
                 last_data = f"{type(exc).__name__}: {exc}"
         time.sleep(2)
 
-    raise RuntimeError(f"等待 /api/auth/session accessToken 超时，最后响应: {str(last_data)[:800]}")
+    try:
+        final_snapshot = _page_snapshot(driver)
+    except Exception:
+        final_snapshot = {}
+    raise RuntimeError(
+        f"等待 /api/auth/session accessToken 超时，最后响应: {str(last_data)[:800]} "
+        f"final={str(final_snapshot)[:1200]}"
+    )
 
 
 def _check_manual_stop() -> None:
@@ -1665,6 +1880,7 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
             proxy_used=proxy or None,
             batch_dir=batch_dir,
             extra={
+                "session": session_info,
                 "user": session_info.get("user"),
                 "account": session_info.get("account"),
                 "expires": session_info.get("expires"),

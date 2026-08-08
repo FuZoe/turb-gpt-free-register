@@ -44,6 +44,43 @@ def test_open_signup_password_waits_for_otp_dom_to_finish_loading(monkeypatch):
     assert driver.attempts == 3
 
 
+def test_fill_password_waits_for_react_form_after_url_changes(monkeypatch):
+    class LoadingPasswordDriver:
+        current_url = "https://auth.openai.com/create-account/password"
+
+        def __init__(self):
+            self.state_reads = 0
+            self.submitted = False
+
+        def execute_script(self, script, *_args):
+            if "const password = String(arguments[0])" in script:
+                self.submitted = True
+                return {"ok": True, "reason": "submitted_password"}
+            self.state_reads += 1
+            inputs = [] if self.state_reads < 5 else [
+                {"type": "password", "visible": True, "autocomplete": "new-password"}
+            ]
+            return {"url": self.current_url, "inputs": inputs, "forms": [], "buttons": []}
+
+    clock = [0.0]
+    driver = LoadingPasswordDriver()
+    monkeypatch.setattr(reg.time, "time", lambda: clock[0])
+    monkeypatch.setattr(reg.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    monkeypatch.setattr(reg, "_is_email_verification_page", lambda _driver: driver.submitted)
+    monkeypatch.setattr(reg, "_has_access_token", lambda _driver: False)
+    monkeypatch.setattr(reg, "_registration_password", lambda: "StrongPassword1!")
+
+    password = reg._fill_password_page_if_present(
+        driver,
+        "user@example.com",
+        timeout=10,
+        prefer_password=True,
+    )
+
+    assert password == "StrongPassword1!"
+    assert driver.state_reads >= 5
+
+
 def test_password_submit_does_not_report_success_while_spinner_is_stuck(monkeypatch):
     class StuckPasswordDriver:
         current_url = "https://auth.openai.com/create-account/password"

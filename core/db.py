@@ -27,6 +27,12 @@ _LEGACY_DATA_DIR = _PROJECT_ROOT / "data"
 _LOG_DIR = _PROJECT_ROOT / "注册日志"
 _PLAN_CHECK_STALE_SECONDS = 120
 _PLAN_CHECK_QUEUE_STALE_SECONDS = 1800
+_GCASH_CHECK_STALE_SECONDS = 120
+_GCASH_CHECK_QUEUE_STALE_SECONDS = 1800
+_TWOFA_TASK_STALE_SECONDS = 900
+_TWOFA_TASK_QUEUE_STALE_SECONDS = 3600
+_PASSWORD_TASK_STALE_SECONDS = 900
+_PASSWORD_TASK_QUEUE_STALE_SECONDS = 3600
 
 _OUTLOOK_JSON = _PROJECT_ROOT / "用于注册的邮箱.json"
 _OUTLOOK_TXT = _PROJECT_ROOT / "用于注册的邮箱.txt"
@@ -560,6 +566,20 @@ def _decorate_account(row: dict) -> dict:
             out["plan_check_status"] = "failed"
             out["plan_check_error"] = "上次套餐查询状态异常，可重新查询"
             out["plan_check_stale"] = True
+    gcash_status = out.get("gcash_check_status")
+    if gcash_status in {"queued", "running"}:
+        try:
+            stamp_key = "gcash_check_queued_at" if gcash_status == "queued" else "gcash_check_started_at"
+            stale_after = _GCASH_CHECK_QUEUE_STALE_SECONDS if gcash_status == "queued" else _GCASH_CHECK_STALE_SECONDS
+            started_at = datetime.fromisoformat(str(out.get(stamp_key) or ""))
+            if (datetime.now() - started_at).total_seconds() >= stale_after:
+                out["gcash_check_status"] = "failed"
+                out["gcash_check_ok"] = False
+                out["gcash_error"] = "Gcash 检测超时，将在服务启动后自动重试"
+        except (TypeError, ValueError):
+            out["gcash_check_status"] = "failed"
+            out["gcash_check_ok"] = False
+            out["gcash_error"] = "Gcash 检测状态异常，将在服务启动后自动重试"
     out["copy_line"] = _account_line(out)
     return out
 
@@ -577,6 +597,31 @@ def _account_matches_plan_filter(row: dict, plan_filter: str | None = None) -> b
     if f == "free":
         return plan == "free"
     return plan == f
+
+
+def _account_matches_material_filters(
+    row: dict,
+    twofa_filter: str | None = None,
+    password_filter: str | None = None,
+    codex_filter: str | None = None,
+) -> bool:
+    twofa = str(twofa_filter or "").strip().lower()
+    password = str(password_filter or "").strip().lower()
+    codex = str(codex_filter or "").strip().lower()
+    has_twofa = bool(str(row.get("totp_secret") or "").strip())
+    has_password = bool(str(row.get("registration_password") or "").strip())
+    if twofa in {"enabled", "with", "yes", "1"} and not has_twofa:
+        return False
+    if twofa in {"disabled", "without", "no", "0"} and has_twofa:
+        return False
+    if password in {"present", "with", "yes", "1"} and not has_password:
+        return False
+    if password in {"missing", "without", "no", "0"} and has_password:
+        return False
+    codex_status = str(row.get("codex_status") or "").strip().lower()
+    if codex in {"incomplete", "missing", "not_success"} and codex_status in {"success", "deactivated"}:
+        return False
+    return True
 
 
 def _decorate_outlook(row: dict, account_by_email: dict[str, dict] | None = None) -> dict:
@@ -838,6 +883,230 @@ def recover_interrupted_codex_agents() -> int:
         return recovered
 
 
+def claim_account_twofa_task(acc_id: int, trigger: str = "manual") -> bool:
+    """Atomically queue a 2FA enrollment task for an account without a local secret."""
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None or str(row.get("totp_secret") or "").strip():
+            return False
+        current_status = str(row.get("twofa_task_status") or "")
+        if current_status in {"queued", "running"}:
+            try:
+                stamp_key = "twofa_task_queued_at" if current_status == "queued" else "twofa_task_started_at"
+                stale_after = _TWOFA_TASK_QUEUE_STALE_SECONDS if current_status == "queued" else _TWOFA_TASK_STALE_SECONDS
+                started_at = datetime.fromisoformat(str(row.get(stamp_key) or ""))
+                if (datetime.now() - started_at).total_seconds() < stale_after:
+                    return False
+            except (TypeError, ValueError):
+                pass
+        now = _now()
+        row.update({
+            "twofa_task_status": "queued",
+            "twofa_task_ok": False,
+            "twofa_task_trigger": str(trigger or "manual"),
+            "twofa_task_queued_at": now,
+            "twofa_task_started_at": None,
+            "twofa_task_completed_at": None,
+            "twofa_task_error": None,
+            "twofa_task_message": "创建 2FA 任务已排队",
+            "updated_at": now,
+        })
+        _save_accounts(accounts)
+        return True
+
+
+def mark_account_twofa_task_running(acc_id: int) -> bool:
+    """Mark a queued 2FA task as running."""
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None or row.get("twofa_task_status") not in {"queued", "running"}:
+            return False
+        now = _now()
+        row.update({
+            "twofa_task_status": "running",
+            "twofa_task_started_at": now,
+            "twofa_task_error": None,
+            "twofa_task_message": "正在登录账号并创建 2FA",
+            "updated_at": now,
+        })
+        _save_accounts(accounts)
+        return True
+
+
+def update_account_twofa_task(acc_id: int, result: dict | None = None) -> bool:
+    """Persist 2FA task progress and synchronize a successful TOTP secret."""
+    result = result or {}
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None:
+            return False
+        status = str(result.get("status") or ("success" if result.get("ok") else "failed"))
+        secret = str(result.get("totp_secret") or "").strip()
+        ok = bool(result.get("ok")) and status == "success" and bool(secret or row.get("totp_secret"))
+        if status == "success" and not ok:
+            status = "failed"
+        now = _now()
+        row.update({
+            "twofa_task_status": status,
+            "twofa_task_ok": ok,
+            "twofa_task_checked_at": result.get("checked_at") or now,
+            "twofa_task_error": None if ok or status == "running" else result.get("error"),
+            "twofa_task_message": result.get("message") or ("2FA 已创建" if ok else "创建 2FA 失败"),
+            "updated_at": now,
+        })
+        if status in {"success", "failed", "stopped"}:
+            row["twofa_task_completed_at"] = now
+        if result.get("proxy_used") is not None:
+            row["twofa_task_proxy_used"] = result.get("proxy_used")
+        if ok and secret:
+            row["totp_secret"] = secret
+        _save_accounts(accounts)
+
+        if ok and secret:
+            email = str(row.get("email") or "").lower()
+            outlook_rows = _load_outlook()
+            outlook_row = _find_by_email(outlook_rows, email)
+            if outlook_row is not None:
+                outlook_row["totp_secret"] = secret
+                _save_outlook(outlook_rows)
+            generic_rows = _load_generic_api_emails()
+            generic_row = _find_by_email(generic_rows, email)
+            if generic_row is not None:
+                generic_row["totp_secret"] = secret
+                _save_generic_api_emails(generic_rows)
+        return True
+
+
+def recover_interrupted_twofa_tasks() -> int:
+    """Mark queued/running 2FA tasks as failed after a WebUI restart."""
+    with _LOCK:
+        accounts = _load_accounts()
+        recovered = 0
+        now = _now()
+        for row in accounts:
+            if row.get("twofa_task_status") not in {"queued", "running"}:
+                continue
+            row.update({
+                "twofa_task_status": "failed",
+                "twofa_task_ok": False,
+                "twofa_task_error": "WebUI 重启导致创建 2FA 任务中断，请重新提交",
+                "twofa_task_message": "创建 2FA 任务已中断",
+                "twofa_task_completed_at": now,
+                "updated_at": now,
+            })
+            recovered += 1
+        if recovered:
+            _save_accounts(accounts)
+        return recovered
+
+
+def claim_account_password_task(acc_id: int, trigger: str = "manual") -> bool:
+    """Atomically queue password creation for an account without a saved login password."""
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None or str(row.get("registration_password") or "").strip():
+            return False
+        current_status = str(row.get("password_task_status") or "")
+        if current_status in {"queued", "running"}:
+            try:
+                stamp_key = "password_task_queued_at" if current_status == "queued" else "password_task_started_at"
+                stale_after = _PASSWORD_TASK_QUEUE_STALE_SECONDS if current_status == "queued" else _PASSWORD_TASK_STALE_SECONDS
+                started_at = datetime.fromisoformat(str(row.get(stamp_key) or ""))
+                if (datetime.now() - started_at).total_seconds() < stale_after:
+                    return False
+            except (TypeError, ValueError):
+                pass
+        now = _now()
+        row.update({
+            "password_task_status": "queued",
+            "password_task_ok": False,
+            "password_task_trigger": str(trigger or "manual"),
+            "password_task_queued_at": now,
+            "password_task_started_at": None,
+            "password_task_completed_at": None,
+            "password_task_error": None,
+            "password_task_message": "创建密码任务已排队",
+            "updated_at": now,
+        })
+        _save_accounts(accounts)
+        return True
+
+
+def mark_account_password_task_running(acc_id: int) -> bool:
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None or row.get("password_task_status") not in {"queued", "running"}:
+            return False
+        now = _now()
+        row.update({
+            "password_task_status": "running",
+            "password_task_started_at": now,
+            "password_task_error": None,
+            "password_task_message": "正在登录账号并创建密码",
+            "updated_at": now,
+        })
+        _save_accounts(accounts)
+        return True
+
+
+def update_account_password_task(acc_id: int, result: dict | None = None) -> bool:
+    result = result or {}
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None:
+            return False
+        status = str(result.get("status") or ("success" if result.get("ok") else "failed"))
+        password = str(result.get("registration_password") or "").strip()
+        ok = bool(result.get("ok")) and status == "success" and bool(password or row.get("registration_password"))
+        if status == "success" and not ok:
+            status = "failed"
+        now = _now()
+        row.update({
+            "password_task_status": status,
+            "password_task_ok": ok,
+            "password_task_checked_at": result.get("checked_at") or now,
+            "password_task_error": None if ok or status == "running" else result.get("error"),
+            "password_task_message": result.get("message") or ("密码已创建" if ok else "创建密码失败"),
+            "updated_at": now,
+        })
+        if status in {"success", "failed", "stopped"}:
+            row["password_task_completed_at"] = now
+        if result.get("proxy_used") is not None:
+            row["password_task_proxy_used"] = result.get("proxy_used")
+        if ok and password:
+            row["registration_password"] = password
+        _save_accounts(accounts)
+        return True
+
+
+def recover_interrupted_password_tasks() -> int:
+    with _LOCK:
+        accounts = _load_accounts()
+        recovered = 0
+        now = _now()
+        for row in accounts:
+            if row.get("password_task_status") not in {"queued", "running"}:
+                continue
+            row.update({
+                "password_task_status": "failed",
+                "password_task_ok": False,
+                "password_task_error": "WebUI 重启导致创建密码任务中断，请重新提交",
+                "password_task_message": "创建密码任务已中断",
+                "password_task_completed_at": now,
+                "updated_at": now,
+            })
+            recovered += 1
+        if recovered:
+            _save_accounts(accounts)
+        return recovered
+
+
 def claim_account_plan_check(
     acc_id: int | None = None,
     email: str | None = None,
@@ -988,9 +1257,126 @@ def update_account_plan_check(acc_id: int | None = None, email: str | None = Non
         row["token_expired"] = result.get("token_expired")
         row["token_expires_at"] = result.get("token_expires_at")
         row["plan_check_result_json"] = json.dumps(result, ensure_ascii=False)
+
+        # Gcash 零元试用资格（来自 gcash check 结果）
+        if result.get("gcash_eligible") is not None:
+            row["gcash_eligible"] = bool(result.get("gcash_eligible"))
+        if result.get("gcash_checked_at") is not None:
+            row["gcash_checked_at"] = result.get("gcash_checked_at")
+        if result.get("gcash_error") is not None:
+            row["gcash_error"] = result.get("gcash_error")
         row["updated_at"] = _now()
         _save_accounts(accounts)
         return True
+
+
+def update_account_gcash_check(acc_id: int | None = None, email: str | None = None, result: dict | None = None) -> bool:
+    """仅写入 Gcash 检测状态，绝不改变 OpenAI 套餐查询结果。"""
+    result = result or {}
+    with _LOCK:
+        accounts = _load_accounts()
+        target_email = (email or "").lower()
+        row = next((
+            r for r in accounts
+            if (acc_id is not None and int(r.get("id") or 0) == int(acc_id))
+            or (target_email and (r.get("email") or "").lower() == target_email)
+        ), None)
+        if row is None:
+            return False
+
+        row["gcash_check_status"] = "success" if result.get("ok") else "failed"
+        row["gcash_check_ok"] = bool(result.get("ok"))
+        row["gcash_checked_at"] = result.get("gcash_checked_at") or _now()
+        row["gcash_check_completed_at"] = _now()
+        row["gcash_http_status"] = result.get("gcash_http_status")
+        row["gcash_error"] = result.get("gcash_error") or None
+        if result.get("gcash_eligible") is not None:
+            row["gcash_eligible"] = bool(result.get("gcash_eligible"))
+        row["updated_at"] = _now()
+        _save_accounts(accounts)
+        return True
+
+
+def claim_account_gcash_check(acc_id: int) -> bool:
+    """原子占用 Gcash 检测；已有未超时检测时返回 False。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None:
+            return False
+        status = row.get("gcash_check_status")
+        if status in {"queued", "running"}:
+            try:
+                stamp_key = "gcash_check_queued_at" if status == "queued" else "gcash_check_started_at"
+                stale_after = _GCASH_CHECK_QUEUE_STALE_SECONDS if status == "queued" else _GCASH_CHECK_STALE_SECONDS
+                started_at = datetime.fromisoformat(str(row.get(stamp_key) or ""))
+                if (datetime.now() - started_at).total_seconds() < stale_after:
+                    return False
+            except (TypeError, ValueError):
+                pass
+        now = _now()
+        row.update({
+            "gcash_check_status": "queued",
+            "gcash_check_queued_at": now,
+            "gcash_check_started_at": None,
+            "gcash_check_completed_at": None,
+            "gcash_error": None,
+            "updated_at": now,
+        })
+        _save_accounts(accounts)
+        return True
+
+
+def mark_account_gcash_check_running(acc_id: int) -> bool:
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None or row.get("gcash_check_status") not in {"queued", "running"}:
+            return False
+        row["gcash_check_status"] = "running"
+        row["gcash_check_started_at"] = _now()
+        row["updated_at"] = _now()
+        _save_accounts(accounts)
+        return True
+
+
+def recover_interrupted_gcash_checks() -> int:
+    """服务启动时恢复上一进程残留的 Gcash 排队状态。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        recovered = 0
+        now = _now()
+        for row in accounts:
+            if row.get("gcash_check_status") not in {"queued", "running"}:
+                continue
+            row.update({
+                "gcash_check_status": "failed",
+                "gcash_check_ok": False,
+                "gcash_check_completed_at": now,
+                "gcash_error": "WebUI 重启导致 Gcash 检测中断，将自动重试",
+                "updated_at": now,
+            })
+            recovered += 1
+        if recovered:
+            _save_accounts(accounts)
+        return recovered
+
+
+def list_unchecked_gcash_free_accounts(limit: int = 500) -> list[dict]:
+    """返回已有套餐结果为 free、但尚未提交 Gcash 检测的账号。"""
+    with _LOCK:
+        rows = []
+        for row in _load_accounts():
+            if bool(row.get("archived")):
+                continue
+            plan = str(row.get("current_plan_type") or row.get("plan_type") or "").strip().lower()
+            if plan != "free" or row.get("gcash_checked_at"):
+                continue
+            if not str(row.get("access_token") or "").strip():
+                continue
+            rows.append(dict(row))
+        rows.sort(key=lambda r: int(r.get("id") or 0))
+        return rows[:max(1, int(limit or 1))]
 
 
 def claim_account_extract(acc_id: int, trigger: str = "manual", link_type: str = "pix") -> bool:
@@ -1112,7 +1498,14 @@ def _account_matches_query(row: dict, q: str | None) -> bool:
         return False
 
 
-def _filtered_decorated_accounts(archived: str | bool | None = False, plan_filter: str | None = None, q: str | None = None) -> list[dict]:
+def _filtered_decorated_accounts(
+    archived: str | bool | None = False,
+    plan_filter: str | None = None,
+    q: str | None = None,
+    twofa_filter: str | None = None,
+    password_filter: str | None = None,
+    codex_filter: str | None = None,
+) -> list[dict]:
     rows = _load_accounts()
     if archived in (True, "1", "true", "yes", "only"):
         rows = [r for r in rows if bool(r.get("archived"))]
@@ -1122,15 +1515,26 @@ def _filtered_decorated_accounts(archived: str | bool | None = False, plan_filte
         rows = [r for r in rows if not bool(r.get("archived"))]
     decorated = [_decorate_account(r) for r in rows]
     decorated = [r for r in decorated if _account_matches_plan_filter(r, plan_filter)]
+    decorated = [r for r in decorated if _account_matches_material_filters(r, twofa_filter, password_filter, codex_filter)]
     decorated = [r for r in decorated if _account_matches_query(r, q)]
     return sorted(decorated, key=lambda x: int(x.get("id") or 0), reverse=True)
 
 
-def list_account_plan_check_statuses(limit: int = 5000, offset: int = 0, archived: str | bool | None = False, plan_filter: str | None = None, q: str | None = None) -> dict:
+def list_account_plan_check_statuses(
+    limit: int = 5000,
+    offset: int = 0,
+    archived: str | bool | None = False,
+    plan_filter: str | None = None,
+    q: str | None = None,
+    twofa_filter: str | None = None,
+    password_filter: str | None = None,
+    codex_filter: str | None = None,
+) -> dict:
     """返回不含 Token/邮箱密码的套餐查询轻量状态快照。"""
     fields = (
         "id", "email", "archived",
         "plan_type", "current_plan_type", "plus_trial_eligible",
+        "gcash_eligible", "gcash_check_status", "gcash_check_ok", "gcash_checked_at", "gcash_error",
         "plan_check_status", "plan_check_ok", "plan_check_error",
         "plan_check_trigger", "plan_check_queued_at", "plan_check_started_at",
         "plan_check_completed_at", "plan_checked_at", "plan_last_success_at",
@@ -1147,9 +1551,22 @@ def list_account_plan_check_statuses(limit: int = 5000, offset: int = 0, archive
         "codex_agent_status", "codex_agent_message",
         "codex_agent_runtime_id", "codex_agent_sub2api_url",
         "codex_agent_sub2api_mode", "codex_agent_sub2api_total",
+        "twofa_task_status", "twofa_task_ok", "twofa_task_message", "twofa_task_error",
+        "twofa_task_trigger", "twofa_task_queued_at", "twofa_task_started_at",
+        "twofa_task_completed_at", "twofa_task_proxy_used",
+        "password_task_status", "password_task_ok", "password_task_message", "password_task_error",
+        "password_task_trigger", "password_task_queued_at", "password_task_started_at",
+        "password_task_completed_at", "password_task_proxy_used",
     )
     with _LOCK:
-        all_rows = _filtered_decorated_accounts(archived=archived, plan_filter=plan_filter, q=q)
+        all_rows = _filtered_decorated_accounts(
+            archived=archived,
+            plan_filter=plan_filter,
+            q=q,
+            twofa_filter=twofa_filter,
+            password_filter=password_filter,
+            codex_filter=codex_filter,
+        )
         total = len(all_rows)
         limit = max(1, int(limit))
         offset = max(0, int(offset or 0))
@@ -1169,6 +1586,7 @@ def list_account_plan_check_statuses(limit: int = 5000, offset: int = 0, archive
                     item.pop(expire_key, None)
             item["codex_agent_has_token"] = bool(str(row.get("codex_agent_token") or "").strip())
             item["has_access_token"] = bool(str(row.get("access_token") or "").strip())
+            item["totp_enabled"] = bool(str(row.get("totp_secret") or "").strip())
             items.append(item)
         latest = max((str(row.get("updated_at") or "") for row in all_rows), default="")
         # updated_at 目前只有秒级精度；一次快速查询可能在同一秒内完成
@@ -1185,9 +1603,18 @@ def list_account_plan_check_statuses(limit: int = 5000, offset: int = 0, archive
                     "current_plan_type": row.get("current_plan_type"),
                     "plan_type": row.get("plan_type"),
                     "plus_trial_eligible": row.get("plus_trial_eligible"),
+                    "gcash_eligible": row.get("gcash_eligible"),
+                    "gcash_check_status": row.get("gcash_check_status"),
+                    "gcash_check_ok": row.get("gcash_check_ok"),
+                    "gcash_checked_at": row.get("gcash_checked_at"),
+                    "gcash_error": row.get("gcash_error"),
                     "extract_link_status": row.get("extract_link_status"),
                     "codex_status": row.get("codex_status"),
                     "codex_agent_status": row.get("codex_agent_status"),
+                    "twofa_task_status": row.get("twofa_task_status"),
+                    "totp_enabled": bool(str(row.get("totp_secret") or "").strip()),
+                    "password_task_status": row.get("password_task_status"),
+                    "has_registration_password": bool(str(row.get("registration_password") or "").strip()),
                 }
                 for row in all_rows
             ],
@@ -1199,15 +1626,47 @@ def list_account_plan_check_statuses(limit: int = 5000, offset: int = 0, archive
         return {"items": items, "total": total, "offset": offset, "limit": limit, "revision": f"{total}:{latest}:{revision_sig}"}
 
 
-def list_accounts(limit: int = 500, offset: int = 0, archived: str | bool | None = False, plan_filter: str | None = None, q: str | None = None) -> list[dict]:
+def list_accounts(
+    limit: int = 500,
+    offset: int = 0,
+    archived: str | bool | None = False,
+    plan_filter: str | None = None,
+    q: str | None = None,
+    twofa_filter: str | None = None,
+    password_filter: str | None = None,
+    codex_filter: str | None = None,
+) -> list[dict]:
     with _LOCK:
-        rows = _filtered_decorated_accounts(archived=archived, plan_filter=plan_filter, q=q)
+        rows = _filtered_decorated_accounts(
+            archived=archived,
+            plan_filter=plan_filter,
+            q=q,
+            twofa_filter=twofa_filter,
+            password_filter=password_filter,
+            codex_filter=codex_filter,
+        )
         return rows[max(0, int(offset or 0)): max(0, int(offset or 0)) + max(1, int(limit))]
 
 
-def list_accounts_page(limit: int = 50, offset: int = 0, archived: str | bool | None = False, plan_filter: str | None = None, q: str | None = None) -> dict:
+def list_accounts_page(
+    limit: int = 50,
+    offset: int = 0,
+    archived: str | bool | None = False,
+    plan_filter: str | None = None,
+    q: str | None = None,
+    twofa_filter: str | None = None,
+    password_filter: str | None = None,
+    codex_filter: str | None = None,
+) -> dict:
     with _LOCK:
-        rows = _filtered_decorated_accounts(archived=archived, plan_filter=plan_filter, q=q)
+        rows = _filtered_decorated_accounts(
+            archived=archived,
+            plan_filter=plan_filter,
+            q=q,
+            twofa_filter=twofa_filter,
+            password_filter=password_filter,
+            codex_filter=codex_filter,
+        )
         total = len(rows)
         limit = max(1, int(limit))
         offset = max(0, int(offset or 0))
@@ -2028,6 +2487,24 @@ def update_job(
         if account_id is not None:
             row["account_id"] = account_id
         _save_jobs(rows)
+
+
+def requeue_interrupted_job(job_id: int, *, clear_email: bool = False) -> bool:
+    """Reset an interrupted in-memory job so startup recovery can submit it again."""
+    with _LOCK:
+        rows = _load_jobs()
+        row = next((r for r in rows if int(r.get("id") or 0) == int(job_id)), None)
+        if row is None:
+            return False
+        row["status"] = "pending"
+        row["error_message"] = None
+        row["started_at"] = None
+        row["completed_at"] = None
+        if clear_email:
+            row["email"] = None
+            row["account_id"] = None
+        _save_jobs(rows)
+        return True
 
 
 def list_jobs(limit: int = 100) -> list[dict]:

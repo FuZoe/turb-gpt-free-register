@@ -242,14 +242,12 @@ def setup_cloak_password(driver: Any, email: str, proxy_url: str | None) -> str:
 
 def setup_cloak_2fa(driver: Any, email: str, proxy_url: str | None) -> str:
     """基于 Cloak 的真实登录态调用 Turb 现有 2FA 协议流程。"""
-    from core.account_export import fetch_session, setup_2fa
+    from core.account_export import setup_2fa
 
     session = build_browser_session_from_cloak(driver, proxy_url)
     try:
-        linked = fetch_session(session)
-        linked_email = str((linked.get("user") or {}).get("email") or "")
-        if linked_email and linked_email.lower() != str(email or "").lower():
-            raise RuntimeError(f"Cloak 会话邮箱不一致：expected={email} actual={linked_email}")
+        # 浏览器阶段已经用页面内 /api/auth/session 确认了账号和 accessToken。
+        # 这里再次用协议会话请求同一接口容易触发 CF 403，并且对 2FA 重认证并非必要。
         secret = setup_2fa(session, email)
         sync_browser_session_to_cloak(driver, session)
         return secret

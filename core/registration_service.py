@@ -10,6 +10,7 @@
     → 创建 5 个任务，丢入线程池，立即返回 [job_dict, ...]
 """
 import logging
+import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -30,6 +31,24 @@ _executor_workers = _DEFAULT_MAX_WORKERS
 _executor_generation = 0
 _retired_executors: list[ThreadPoolExecutor] = []
 _executor_lock = threading.RLock()
+
+
+def _global_registration_limit() -> int:
+    """Return the process-wide browser limit shared by every tenant and pool generation."""
+    try:
+        raw = (
+            os.getenv("REGISTRATION_GLOBAL_CONCURRENCY")
+            or os.getenv("REGISTRATION_WORKERS_LIMIT")
+            or "3"
+        )
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = 3
+    return max(_MIN_MAX_WORKERS, min(_MAX_MAX_WORKERS, value))
+
+
+_GLOBAL_REGISTRATION_LIMIT = _global_registration_limit()
+_GLOBAL_REGISTRATION_SLOTS = threading.BoundedSemaphore(_GLOBAL_REGISTRATION_LIMIT)
 
 _STOP_EVENTS: dict[tuple[str, int], threading.Event] = {}
 _ACTIVE_JOBS: set[tuple[str, int]] = set()
@@ -185,6 +204,84 @@ def _should_disable_failed_registration_email(error: object) -> bool:
     )
 
 
+def _is_cloudflare_challenge_failure(error: object) -> bool:
+    text = str(error or "").lower()
+    return "cloudflarechallengeerror" in text or "cloudflare challenge/403" in text
+
+
+def _is_proxy_navigation_failure(error: object) -> bool:
+    """Identify browser navigation failures that should rotate the current proxy."""
+    text = str(error or "").lower()
+    network_markers = (
+        "err_connection_closed",
+        "err_connection_reset",
+        "err_connection_timed_out",
+        "err_proxy_connection_failed",
+        "err_socks_connection_failed",
+        "ssl_error_syscall",
+        "tls connect error",
+        "curl: (35)",
+        "curl: (52)",
+        "curl: (56)",
+    )
+    if any(marker in text for marker in network_markers):
+        return True
+    return "page.goto" in text and "timeout 30000ms exceeded" in text
+
+
+def get_auto_retry_limit() -> int:
+    """Return the hot-reloadable registration retry limit, clamped to 0..10."""
+    from config import register as register_cfg
+
+    raw = os.getenv(
+        "REGISTRATION_CF_AUTO_RETRIES",
+        str(getattr(register_cfg, "REGISTRATION_CF_AUTO_RETRIES", 3)),
+    )
+    try:
+        return max(0, min(10, int(raw or 0)))
+    except (TypeError, ValueError):
+        return 3
+
+
+def _maybe_auto_retry_cloudflare(job_id: int, error: object) -> dict | None:
+    """认证拦截或代理导航失败时创建子任务，并随机选择另一固定出口。"""
+    cloudflare_failure = _is_cloudflare_challenge_failure(error)
+    navigation_failure = _is_proxy_navigation_failure(error)
+    if not cloudflare_failure and not navigation_failure:
+        return None
+    source = db.get_job(int(job_id)) or {}
+    max_retries = get_auto_retry_limit()
+    attempt = int(source.get("retry_attempt") or 0)
+    if attempt >= max_retries:
+        reason_label = "Cloudflare" if cloudflare_failure else "代理导航超时"
+        message = f"{reason_label} 自动换线路已达到 {max_retries} 次上限"
+        _append_job_log(job_id, message, source="cloudflare-retry")
+        logger.warning("[Job %s] %s", job_id, message)
+        return {"ok": False, "created": False, "error": message}
+    result = retry_job(job_id, workers=get_executor_workers())
+    child = (result or {}).get("job") or {}
+    if result.get("ok"):
+        reason_label = "Cloudflare 403" if cloudflare_failure else "代理导航超时"
+        message = f"检测到 {reason_label}，已自动冷却当前线路并创建换线路任务 #{child.get('id')}（{attempt + 1}/{max_retries}）"
+        _append_job_log(job_id, message, source="cloudflare-retry")
+        if child.get("id"):
+            _append_job_log(int(child["id"]), f"由任务 #{job_id} 遇到 {reason_label} 自动换线路", source="cloudflare-retry")
+        logger.warning("[Job %s] %s", job_id, message)
+    else:
+        logger.error("[Job %s] Cloudflare 自动换线路任务创建失败：%s", job_id, result.get("error"))
+    return result
+
+
+def run_with_global_browser_slot(tenant_id: str, func, *args) -> Any:
+    """Run one browser lifecycle under the hard process-wide concurrency cap."""
+    with _GLOBAL_REGISTRATION_SLOTS:
+        return run_for_tenant(tenant_id, func, *args)
+
+
+# Backward-compatible internal name used by existing registration submissions.
+_run_registration_with_global_slot = run_with_global_browser_slot
+
+
 def _disable_job_email(email: str | None, reason: str) -> bool:
     """把本次任务邮箱停用，避免后续再次领取。"""
     if not email:
@@ -201,34 +298,70 @@ def _disable_job_email(email: str | None, reason: str) -> bool:
 
 
 def recover_interrupted_jobs() -> int:
-    """Web 服务启动时回收上一个进程遗留的活跃任务。
-
-    线程池只存在于进程内；服务一旦重启，持久化为 pending/running/stopping
-    的记录已经没有对应 Future 或工作线程。把它们落为 stopped，既避免前端
-    永久显示运行，也允许用户从原任务创建一次可追踪的重试。
-    """
+    """Re-submit queued/running jobs after a Web service restart."""
     active_states = {"pending", "running", "stopping"}
-    stale_jobs = [
+    stale_jobs = sorted([
         job for job in db.list_jobs(limit=100_000)
         if str(job.get("status") or "") in active_states
-    ]
+    ], key=lambda job: int(job.get("id") or 0))
     if not stale_jobs:
         return 0
 
-    now_iso = datetime.now().isoformat(timespec="seconds")
+    tenant_id = current_tenant()
+    executor = get_executor(max_workers=_DEFAULT_MAX_WORKERS)
     for job in stale_jobs:
         job_id = int(job.get("id") or 0)
         old_status = str(job.get("status") or "unknown")
-        reason = f"服务进程重启，原任务实例已终止（原状态：{old_status}）"
-        db.update_job(
-            job_id,
-            status="stopped",
-            error=reason,
-            completed_at=now_iso,
-        )
-        _release_unconsumed_job_email(str(job.get("email") or "").strip() or None, reason)
+        job_type = str(job.get("job_type") or "registration")
+        if old_status == "stopping":
+            reason = "服务重启时任务已处于停止中，保持停止状态"
+            db.update_job(job_id, status="stopped", error=reason, completed_at=datetime.now().isoformat(timespec="seconds"))
+            if job_type == "registration":
+                _release_unconsumed_job_email(str(job.get("email") or "").strip() or None, reason)
+            _append_job_log(job_id, reason, source="startup-recovery")
+            continue
+
+        reason = f"服务进程重启，任务自动重新排队（原状态：{old_status}）"
+        clear_email = job_type == "registration"
+        if old_status == "running" and clear_email:
+            _release_unconsumed_job_email(str(job.get("email") or "").strip() or None, reason)
+        if not db.requeue_interrupted_job(job_id, clear_email=clear_email):
+            logger.error("[Service] 启动时重新排队失败，任务不存在：#%s", job_id)
+            continue
         _append_job_log(job_id, reason, source="startup-recovery")
-        logger.warning("[Service] 启动时回收孤儿任务 #%s：%s -> stopped", job_id, old_status)
+
+        try:
+            if job_type == "codex_retry":
+                email = str(job.get("email") or "").strip()
+                account_id = int(job.get("account_id") or 0)
+                if not email or not account_id or not codex_retry_service.reserve(email):
+                    raise RuntimeError("Codex 补跑任务缺少账号信息或已有同账号任务")
+                db.update_account_codex_status(email, "retrying", None)
+                executor.submit(
+                    _run_registration_with_global_slot,
+                    tenant_id,
+                    _run_codex_retry_job,
+                    job_id,
+                    job.get("log_file") or "",
+                    email,
+                    account_id,
+                )
+            else:
+                executor.submit(
+                    _run_registration_with_global_slot,
+                    tenant_id,
+                    _run_one_job,
+                    job_id,
+                    job.get("log_file") or "",
+                )
+            logger.warning("[Service] 启动时恢复任务 #%s：%s -> pending", job_id, old_status)
+        except Exception as exc:
+            if job_type == "codex_retry":
+                codex_retry_service.release(str(job.get("email") or ""))
+            error = f"服务重启后重新提交失败：{type(exc).__name__}: {exc}"[:500]
+            db.update_job(job_id, status="failed", error=error, completed_at=datetime.now().isoformat(timespec="seconds"))
+            _append_job_log(job_id, error, source="startup-recovery")
+            logger.exception("[Service] 启动时提交恢复任务失败：#%s", job_id)
     return len(stale_jobs)
 
 
@@ -393,6 +526,7 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                 else:
                     _release_unconsumed_job_email(email_to_handle, str(err))
                 log_logger.error(f"[Job {job_id}] 失败: {err}")
+                _maybe_auto_retry_cloudflare(job_id, err)
     except StopRequested as exc:
         _release_unconsumed_job_email(email, str(exc))
         log_logger.warning(f"[Job {job_id}] 已停止: {exc}")
@@ -424,6 +558,7 @@ def _run_one_job(job_id: int, log_file: str) -> None:
             error=f"{type(exc).__name__}: {exc}"[:500],
             completed_at=datetime.now().isoformat(timespec="seconds"),
         )
+        _maybe_auto_retry_cloudflare(job_id, err_text)
     finally:
         _deactivate_job(job_id)
 
@@ -503,7 +638,7 @@ def submit_registration(count: int = 1, email_source: str | None = None, workers
         for _ in range(count):
             job = db.create_job(email_source=email_source)
             try:
-                executor.submit(run_for_tenant, tenant_id, _run_one_job, job["id"], job["log_file"])
+                executor.submit(_run_registration_with_global_slot, tenant_id, _run_one_job, job["id"], job["log_file"])
             except Exception as exc:
                 db.update_job(
                     int(job["id"]),
@@ -636,9 +771,9 @@ def retry_job(job_id: int, workers: int | None = None) -> dict:
             executor = get_executor(max_workers=workers)
             tenant_id = current_tenant()
             if action == "codex":
-                executor.submit(run_for_tenant, tenant_id, _run_codex_retry_job, job["id"], job["log_file"], email, int(account_id))
+                executor.submit(_run_registration_with_global_slot, tenant_id, _run_codex_retry_job, job["id"], job["log_file"], email, int(account_id))
             else:
-                executor.submit(run_for_tenant, tenant_id, _run_one_job, job["id"], job["log_file"])
+                executor.submit(_run_registration_with_global_slot, tenant_id, _run_one_job, job["id"], job["log_file"])
     except Exception as exc:
         if reserved_codex:
             codex_retry_service.release(email)
