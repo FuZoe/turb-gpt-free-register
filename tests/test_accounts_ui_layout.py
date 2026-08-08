@@ -148,3 +148,6 @@ def test_console_ui_module_keeps_account_actions_grouped_and_available():
         assert action in text
     assert "--ui-action-height: 31px" in css
     assert "grid-template-columns: repeat(2, minmax(260px, 1fr))" in css
+    assert "container: account-list / inline-size" in css
+    assert "@container account-list (max-width: 1700px)" in css
+    assert "grid-column: 1 / -1" in css

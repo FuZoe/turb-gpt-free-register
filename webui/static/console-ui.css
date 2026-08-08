@@ -113,14 +113,79 @@ select:focus-visible, textarea:focus-visible {
 .account-secret-cell, .agent-token-cell, .extract-link-cell { gap: 7px; }
 .runtime-resource { min-width: 232px; padding: 12px 14px; }
 
-@media (max-width: 1260px) {
+/* The account table becomes cards based on its own available width, not viewport width. */
+#tab-accounts > .card { container: account-list / inline-size; }
+
+@container account-list (max-width: 1700px) {
+  .accounts-toolbar .search { min-width: min(100%, 280px); }
+  .accounts-table colgroup,
+  .accounts-table thead { display: none; }
+  .accounts-table,
+  .accounts-table tbody { display: block; width: 100%; table-layout: auto; }
+  .accounts-table tr {
+    display: grid;
+    grid-template-columns: 38px minmax(180px, 1fr) minmax(175px, .85fr) minmax(250px, 1.55fr);
+    gap: 8px 14px;
+    width: auto;
+    margin: 10px;
+    padding: 12px;
+    border: 1px solid var(--ui-border);
+    border-radius: 8px;
+    background: #fff;
+  }
+  .accounts-table td {
+    display: block;
+    width: auto !important;
+    min-width: 0;
+    overflow: visible !important;
+    padding: 0;
+    border: 0;
+    white-space: normal;
+    text-overflow: clip;
+  }
+  .accounts-table tbody tr:hover td { background: transparent; }
+  .accounts-table td:nth-child(1) { grid-column: 1; grid-row: 1 / span 3; padding-top: 3px; }
+  .accounts-table td:nth-child(2) { grid-column: 2; color: var(--ui-subtle); font-size: 12px; font-weight: 800; }
+  .accounts-table td:nth-child(3) { grid-column: 2; overflow-wrap: anywhere; }
+  .accounts-table td:nth-child(4) { grid-column: 3; }
+  .accounts-table td:nth-child(5) { grid-column: 3; }
+  .accounts-table td:nth-child(6) { grid-column: 4; }
+  .accounts-table td:nth-child(7) { grid-column: 4; }
+  .accounts-table td:nth-child(8) { grid-column: 1 / -1; padding-top: 8px; border-top: 1px solid #e7edf3; }
+  .accounts-table td:nth-child(4)::before,
+  .accounts-table td:nth-child(5)::before,
+  .accounts-table td:nth-child(6)::before,
+  .accounts-table td:nth-child(7)::before {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--ui-subtle);
+    font-size: 11px;
+    font-weight: 800;
+  }
+  .accounts-table td:nth-child(4)::before { content: "套餐"; }
+  .accounts-table td:nth-child(5)::before { content: "备注"; }
+  .accounts-table td:nth-child(6)::before { content: "密码 / 2FA"; }
+  .accounts-table td:nth-child(7)::before { content: "Codex"; }
+  .account-row-actions { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+  .account-action-group { min-width: 0; }
+  .table-wrap { overflow: visible; }
+}
+
+@container account-list (max-width: 860px) {
+  .accounts-table tr { grid-template-columns: 34px minmax(0, 1fr); }
+  .accounts-table td:nth-child(1) { grid-column: 1; grid-row: 1 / span 5; }
+  .accounts-table td:nth-child(2),
+  .accounts-table td:nth-child(3),
+  .accounts-table td:nth-child(4),
+  .accounts-table td:nth-child(5),
+  .accounts-table td:nth-child(6),
+  .accounts-table td:nth-child(7) { grid-column: 2; }
   .account-row-actions { grid-template-columns: 1fr; }
-  .accounts-table .col-actions { width: 360px; }
 }
 
 @media (max-width: 760px) {
   :root { --ui-control-height: 42px; --ui-action-height: 36px; }
   .accounts-toolbar .search { min-width: 100%; }
   .btn-group { width: 100%; }
-  .account-row-actions { min-width: 270px; }
+  .account-row-actions { min-width: 0; }
 }
