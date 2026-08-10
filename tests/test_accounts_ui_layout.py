@@ -152,3 +152,6 @@ def test_console_ui_module_keeps_account_actions_grouped_and_available():
     assert "@container account-list (max-width: 1700px)" in css
     assert "grid-column: 1 / -1" in css
     assert "grid-template-columns: 38px minmax(240px, 1.45fr)" in css
+    assert "one table row" in css
+    assert "min-width: 1790px" in css
+    assert "flex-wrap: nowrap" in css

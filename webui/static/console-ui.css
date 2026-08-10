@@ -8,6 +8,7 @@
   --ui-hover: #f0f5ff;
   --ui-blue: #175cd3;
   --ui-red: #b42318;
+  --page-max-width: 1900px;
 }
 
 /* Shared controls: all commands keep a stable, finger-sized target. */
@@ -197,4 +198,65 @@ select:focus-visible, textarea:focus-visible {
   .accounts-toolbar .search { min-width: 100%; }
   .btn-group { width: 100%; }
   .account-row-actions { min-width: 0; }
+}
+
+/* Final account-list layout: one account is always one table row. */
+#tab-accounts > .card { container-type: normal; container-name: none; }
+#tab-accounts .table-wrap { overflow-x: auto; overflow-y: hidden; }
+#tab-accounts .accounts-table {
+  min-width: 1790px;
+  table-layout: fixed;
+  white-space: nowrap;
+}
+#tab-accounts .accounts-table .col-check { width: 34px; }
+#tab-accounts .accounts-table .col-id { width: 48px; }
+#tab-accounts .accounts-table .col-email { width: 220px; }
+#tab-accounts .accounts-table .col-plan { width: 245px; }
+#tab-accounts .accounts-table .col-note { width: 82px; }
+#tab-accounts .accounts-table .col-small { width: 190px; }
+#tab-accounts .accounts-table .col-status { width: 140px; }
+#tab-accounts .accounts-table .col-actions { width: 831px; }
+#tab-accounts .accounts-table tr { display: table-row; margin: 0; padding: 0; border: 0; border-radius: 0; }
+#tab-accounts .accounts-table td {
+  display: table-cell;
+  width: auto !important;
+  min-width: 0;
+  padding: 8px 7px;
+  border-bottom: 1px solid #edf1f5;
+  white-space: nowrap;
+  overflow: hidden !important;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+#tab-accounts .accounts-table tbody tr:hover td { background: #fbfdff; }
+#tab-accounts .account-row-actions { display: flex; flex-wrap: nowrap; gap: 5px; align-items: center; min-width: max-content; }
+#tab-accounts .account-action-group {
+  display: inline-flex;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  min-height: 0;
+  padding: 3px;
+  gap: 4px;
+  border-radius: 6px;
+}
+#tab-accounts .account-action-group::before { display: none; }
+#tab-accounts .account-secret-cell,
+#tab-accounts .agent-token-cell,
+#tab-accounts .extract-link-cell { flex-wrap: nowrap; white-space: nowrap; }
+#tab-accounts .extract-link-cell { overflow: hidden; }
+#tab-accounts .extract-link-error {
+  flex: 0 1 190px;
+  flex-basis: auto;
+  max-width: 190px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+#tab-accounts .accounts-table .actions button,
+#tab-accounts .account-secret-cell button,
+#tab-accounts .agent-token-cell button,
+#tab-accounts .accounts-table .extract-link-btn {
+  min-height: 29px;
+  padding-inline: 8px;
+  font-size: 11px;
 }
