@@ -124,7 +124,8 @@ select:focus-visible, textarea:focus-visible {
   .accounts-table tbody { display: block; width: 100%; table-layout: auto; }
   .accounts-table tr {
     display: grid;
-    grid-template-columns: 38px minmax(180px, 1fr) minmax(175px, .85fr) minmax(250px, 1.55fr);
+    grid-template-columns: 38px minmax(240px, 1.45fr) minmax(250px, 1.35fr) minmax(160px, .75fr) minmax(90px, .5fr);
+    grid-template-rows: minmax(40px, auto) minmax(24px, auto) auto;
     gap: 8px 14px;
     width: auto;
     margin: 10px;
@@ -144,14 +145,21 @@ select:focus-visible, textarea:focus-visible {
     text-overflow: clip;
   }
   .accounts-table tbody tr:hover td { background: transparent; }
-  .accounts-table td:nth-child(1) { grid-column: 1; grid-row: 1 / span 3; padding-top: 3px; }
-  .accounts-table td:nth-child(2) { grid-column: 2; color: var(--ui-subtle); font-size: 12px; font-weight: 800; }
-  .accounts-table td:nth-child(3) { grid-column: 2; overflow-wrap: anywhere; }
-  .accounts-table td:nth-child(4) { grid-column: 3; }
-  .accounts-table td:nth-child(5) { grid-column: 3; }
-  .accounts-table td:nth-child(6) { grid-column: 4; }
-  .accounts-table td:nth-child(7) { grid-column: 4; }
-  .accounts-table td:nth-child(8) { grid-column: 1 / -1; padding-top: 8px; border-top: 1px solid #e7edf3; }
+  .accounts-table td:nth-child(1) { grid-column: 1; grid-row: 1 / span 2; padding-top: 3px; }
+  .accounts-table td:nth-child(2) {
+    grid-column: 2;
+    grid-row: 1;
+    z-index: 1;
+    color: var(--ui-subtle);
+    font-size: 12px;
+    font-weight: 800;
+  }
+  .accounts-table td:nth-child(3) { grid-column: 2; grid-row: 1 / span 2; padding-top: 20px; overflow-wrap: anywhere; }
+  .accounts-table td:nth-child(4) { grid-column: 3; grid-row: 1; }
+  .accounts-table td:nth-child(5) { grid-column: 3; grid-row: 2; }
+  .accounts-table td:nth-child(6) { grid-column: 4; grid-row: 1 / span 2; }
+  .accounts-table td:nth-child(7) { grid-column: 5; grid-row: 1 / span 2; }
+  .accounts-table td:nth-child(8) { grid-column: 1 / -1; grid-row: 3; padding-top: 8px; border-top: 1px solid #e7edf3; }
   .accounts-table td:nth-child(4)::before,
   .accounts-table td:nth-child(5)::before,
   .accounts-table td:nth-child(6)::before,
@@ -172,14 +180,15 @@ select:focus-visible, textarea:focus-visible {
 }
 
 @container account-list (max-width: 860px) {
-  .accounts-table tr { grid-template-columns: 34px minmax(0, 1fr); }
+  .accounts-table tr { grid-template-columns: 34px minmax(0, 1fr); grid-template-rows: auto; }
   .accounts-table td:nth-child(1) { grid-column: 1; grid-row: 1 / span 5; }
-  .accounts-table td:nth-child(2),
-  .accounts-table td:nth-child(3),
+  .accounts-table td:nth-child(2) { grid-column: 2; grid-row: 1; }
+  .accounts-table td:nth-child(3) { grid-column: 2; grid-row: 1; padding-top: 20px; }
   .accounts-table td:nth-child(4),
   .accounts-table td:nth-child(5),
   .accounts-table td:nth-child(6),
-  .accounts-table td:nth-child(7) { grid-column: 2; }
+  .accounts-table td:nth-child(7) { grid-column: 2; grid-row: auto; }
+  .accounts-table td:nth-child(8) { grid-column: 1 / -1; grid-row: auto; }
   .account-row-actions { grid-template-columns: 1fr; }
 }
 
