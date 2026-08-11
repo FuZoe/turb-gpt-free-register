@@ -233,9 +233,6 @@
       flex-basis: 100%; color: var(--red); font-size: 12px; line-height: 1.35;
       max-width: 260px; white-space: normal; overflow-wrap: anywhere;
     }
-    .agent-token-cell { margin-top: 4px; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
-    .agent-token-cell button { min-height:24px; border:1px solid #b9dfc9; border-radius:999px; background:#f0fbf5; color:#166534; padding:0 9px; font-size:12px; font-weight:800; cursor:pointer; }
-    .agent-token-cell .agent-download { border-color:#bdd0ff; background:#f3f7ff; color:#1d4ed8; }
     .actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
     .jobs-table td.actions-cell { text-align: center; vertical-align: middle; overflow: visible; }
     .job-actions { justify-content: center; flex-wrap: nowrap; width: 100%; }
@@ -302,8 +299,7 @@
     .account-action-group .primary { background: #2563eb; border-color: #2563eb; color: #fff; }
     .account-action-group .good { background: #edf8f1; border-color: #b9dfc9; color: #166534; }
     .accounts-table .extract-link-cell { gap: 4px; margin-top: 3px; }
-    .accounts-table .extract-link-btn, .accounts-table .agent-token-cell button { min-height: 22px; padding: 0 7px; font-size: 11px; }
-    .accounts-table .agent-token-cell { gap: 4px; margin-top: 2px; }
+    .accounts-table .extract-link-btn { min-height: 22px; padding: 0 7px; font-size: 11px; }
     .accounts-table .extract-link-expire, .accounts-table .extract-link-error { font-size: 11px; }
     @media (max-width: 900px) {
       .accounts-topbar { align-items: stretch; flex-direction: column; }
@@ -321,8 +317,8 @@
       width: 100%; max-width: 100%; min-width: 0;
       max-height: 320px; overflow: auto; line-height: 1.5;
     }
-    #logPanel, #retryLogPanel, #qrPanel, #secretPanel, #agentTokenPanel, #autoTaskPanel, #extractLinkPanel { min-width: 0; max-width: 100%; overflow-x: hidden; }
-    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #qrPanel:not(.hidden), #secretPanel:not(.hidden), #agentTokenPanel:not(.hidden), #autoTaskPanel:not(.hidden), #extractLinkPanel:not(.hidden) {
+    #logPanel, #retryLogPanel, #qrPanel, #secretPanel, #autoTaskPanel, #extractLinkPanel { min-width: 0; max-width: 100%; overflow-x: hidden; }
+    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #qrPanel:not(.hidden), #secretPanel:not(.hidden), #autoTaskPanel:not(.hidden), #extractLinkPanel:not(.hidden) {
       position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
       z-index: 1000; display: block; width: min(1100px, calc(100vw - 48px));
       max-height: min(760px, calc(100vh - 48px)); overflow: hidden;
@@ -331,11 +327,10 @@
     }
     #qrPanel:not(.hidden) { width: min(520px, calc(100vw - 48px)); text-align: center; }
     #secretPanel:not(.hidden) { width: min(560px, calc(100vw - 48px)); }
-    #agentTokenPanel:not(.hidden) { width: min(760px, calc(100vw - 48px)); }
     #autoTaskPanel:not(.hidden) { width: min(920px, calc(100vw - 32px)); max-height: min(820px, calc(100vh - 32px)); overflow:auto; }
     #extractLinkPanel:not(.hidden) { width: min(620px, calc(100vw - 32px)); }
-    #logPanel h3, #retryLogPanel h3, #qrPanel h3, #secretPanel h3, #agentTokenPanel h3, #autoTaskPanel h3, #extractLinkPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
-    #logPanel h3 .btn, #retryLogPanel h3 .btn, #qrPanel h3 .btn, #secretPanel h3 .btn, #agentTokenPanel h3 .btn, #autoTaskPanel h3 .btn, #extractLinkPanel h3 .btn { margin-left:auto; float:none !important; }
+    #logPanel h3, #retryLogPanel h3, #qrPanel h3, #secretPanel h3, #autoTaskPanel h3, #extractLinkPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+    #logPanel h3 .btn, #retryLogPanel h3 .btn, #qrPanel h3 .btn, #secretPanel h3 .btn, #autoTaskPanel h3 .btn, #extractLinkPanel h3 .btn { margin-left:auto; float:none !important; }
     .extract-provider-options { display:grid; gap:8px; margin:12px 0; }
     .extract-provider-option { display:flex; gap:9px; align-items:flex-start; padding:11px 12px; border:1px solid var(--line); border-radius:9px; cursor:pointer; }
     .extract-provider-option input { width:auto; min-height:auto; margin-top:3px; }
@@ -347,7 +342,6 @@
     .secret-value-row { display:flex; gap:8px; align-items:flex-end; }
     .secret-value-row label { flex:1; margin:0; }
     .secret-value-row input { font-family:ui-monospace,Consolas,monospace; }
-    #agentTokenValue { min-height:180px; max-height:360px; font-family:ui-monospace,Consolas,monospace; }
     .auto-task-options { display:flex; gap:8px; flex-wrap:wrap; padding:10px 0 14px; border-bottom:1px solid var(--line); }
     .auto-task-option { display:inline-flex; align-items:center; gap:7px; min-height:34px; padding:0 12px; border:1px solid var(--line); border-radius:6px; background:#fff; font-size:13px; font-weight:800; cursor:pointer; }
     .auto-task-option:has(input:checked) { border-color:var(--blue); background:#eef4ff; color:#1d4ed8; }
@@ -443,7 +437,7 @@
     }
     .roxy-invite-link:hover { background: #e0ebff; }
   </style>
-  <link rel="stylesheet" href="{{ url_for('static', filename='console-ui.css', v='20260811-ui5') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='console-ui.css', v='20260811-ui6') }}">
 </head>
 <body>
 <header>
@@ -1801,13 +1795,10 @@ async function pollAccountPlanStatuses() {
         const isChecking = ['queued', 'running'].includes(item.plan_check_status);
         const wasExtracting = ['queued', 'running'].includes(account?.extract_link_status);
         const isExtracting = ['queued', 'running'].includes(item.extract_link_status);
-        const wasAgenting = ['queued', 'running'].includes(account?.codex_agent_status);
-        const isAgenting = ['queued', 'running'].includes(item.codex_agent_status);
         const wasCreatingTwofa = ['queued', 'running'].includes(account?.twofa_task_status);
         const isCreatingTwofa = ['queued', 'running'].includes(item.twofa_task_status);
         if (wasChecking && !isChecking) needsFullReload = true;
         if (wasExtracting && !isExtracting) needsFullReload = true;
-        if (wasAgenting && !isAgenting) needsFullReload = true;
         if (wasCreatingTwofa && !isCreatingTwofa) needsFullReload = true;
         Object.assign(account, item);
       });
@@ -2597,168 +2588,6 @@ async function submitExtractLinkTask() {
 $$('input[name="extractLinkProvider"]').forEach(input => input.addEventListener('change', syncExtractLinkProviderForm));
 $('#btnCloseExtractLink').addEventListener('click', closeExtractLinkPanel);
 $('#btnSubmitExtractLink').addEventListener('click', submitExtractLinkTask);
-
-async function generateOneCodexAgent(id, btn) {
-  const acc = ACCOUNTS.find(a => Number(a.id) === Number(id));
-  if (!acc) { showToast('账号不存在'); return; }
-  if (!acc.has_access_token) { showToast('该账号没有 access_token'); return; }
-  if (!confirm(`确定为该账号生成 Codex Agent Token 吗？\n\n${acc.email || ('#' + id)}\n\n会调用 auth.openai.com 注册 agent_identity，并保存到本地账号记录。`)) return;
-  const old = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = '生成中…';
-  try {
-    await api('/api/accounts/codex-agent', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({account_id: id}),
-    });
-    showToast('Codex Agent Token 生成任务已入队');
-    await pollAccountPlanStatuses();
-  } catch(err) {
-    showToast('生成失败: ' + err.message);
-    btn.disabled = false;
-    btn.textContent = old;
-  }
-}
-
-async function generateSelectedCodexAgents() {
-  const ids = Array.from(ACCOUNT_SELECTED);
-  if (ids.length === 0) { showToast('请先选择账号'); return; }
-  const selected = ids.map(id => ACCOUNTS.find(a => Number(a.id) === Number(id))).filter(Boolean);
-  const eligible = selected.filter(a => a.has_access_token);
-  if (!eligible.length) { showToast('选中账号里没有可用 access_token'); return; }
-  if (!confirm(`确定批量生成 ${eligible.length} 个 Codex Agent Token 吗？\n\n缺少 access_token 的账号会自动跳过。`)) return;
-  const btn = $('#btnGenerateSelectedAgent');
-  const old = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = '生成中…';
-  try {
-    const r = await api('/api/accounts/codex-agent-bulk', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({account_ids: ids}),
-    });
-    const skipped = (r.skipped_count || 0) + (r.busy_count || 0) + (r.failed_count || 0);
-    showToast(skipped ? `已入队 ${r.started_count || 0} 个，跳过/失败 ${skipped} 个` : `已入队 ${r.started_count || 0} 个`);
-    await pollAccountPlanStatuses();
-  } catch(err) {
-    showToast('批量生成失败: ' + err.message);
-    updateAccountSelectionUi();
-  } finally {
-    btn.textContent = old;
-  }
-}
-
-async function uploadOneCodexAgentSub2(id, btn) {
-  const acc = ACCOUNTS.find(a => Number(a.id) === Number(id));
-  if (!acc) { showToast('账号不存在'); return; }
-  if ((acc.codex_agent_status || '') !== 'success') { showToast('该账号还没有生成 Agent Token'); return; }
-  if (!confirm(`确定上传该账号 Agent Token 到 sub2api 吗？\n\n${acc.email || ('#' + id)}`)) return;
-  const old = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = '上传中…';
-  try {
-    await api(`/api/accounts/${encodeURIComponent(id)}/codex-agent/upload-sub2`, { method:'POST' });
-    showToast('Agent Token 已上传 sub2api');
-    await pollAccountPlanStatuses();
-  } catch(err) {
-    showToast('上传 sub2 失败: ' + err.message);
-    btn.disabled = false;
-    btn.textContent = old;
-  }
-}
-
-async function uploadSelectedCodexAgentSub2() {
-  const ids = Array.from(ACCOUNT_SELECTED);
-  if (ids.length === 0) { showToast('请先选择账号'); return; }
-  const selected = ids.map(id => ACCOUNTS.find(a => Number(a.id) === Number(id))).filter(Boolean);
-  const ready = selected.filter(a => (a.codex_agent_status || '') === 'success');
-  if (!ready.length) { showToast('选中账号里没有已生成的 Agent Token'); return; }
-  if (!confirm(`确定上传选中的 ${ready.length} 个 Agent Token 到 sub2api 吗？\n\n未生成成功的账号会自动跳过。`)) return;
-  const btn = $('#btnUploadSelectedAgentSub2');
-  const old = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = '上传中…';
-  try {
-    const r = await api('/api/accounts/codex-agent/upload-sub2-bulk', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({account_ids: ids}),
-    });
-    const skipped = (r.skipped_count || 0) + (r.failed_count || 0);
-    showToast(skipped ? `已上传 ${r.uploaded_count || 0} 个，跳过/失败 ${skipped} 个` : `已上传 ${r.uploaded_count || 0} 个`);
-    await pollAccountPlanStatuses();
-  } catch(err) {
-    showToast('批量上传 sub2 失败: ' + err.message);
-    updateAccountSelectionUi();
-  } finally {
-    btn.textContent = old;
-  }
-}
-
-function _ensureDownloadFrame(name) {
-  let iframe = document.querySelector(`iframe[name="${name}"]`);
-  if (!iframe) {
-    iframe = document.createElement('iframe');
-    iframe.name = name;
-    iframe.style.display = 'none';
-    document.body.appendChild(iframe);
-  }
-  return iframe;
-}
-
-function downloadOneCodexAgent(id) {
-  const acc = ACCOUNTS.find(a => Number(a.id) === Number(id));
-  if (!acc) { showToast('账号不存在'); return; }
-  if ((acc.codex_agent_status || '') !== 'success') { showToast('该账号还没有生成 Agent Token'); return; }
-  _ensureDownloadFrame('codexAgentDownloadFrame');
-  const a = document.createElement('a');
-  a.href = `/api/accounts/${encodeURIComponent(id)}/codex-agent/download`;
-  a.target = 'codexAgentDownloadFrame';
-  a.style.display = 'none';
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => a.remove(), 1000);
-  showToast('已提交 Agent Token 下载');
-}
-
-function downloadSelectedCodexAgents() {
-  const ids = Array.from(ACCOUNT_SELECTED);
-  if (ids.length === 0) { showToast('请先选择账号'); return; }
-  const selected = ids.map(id => ACCOUNTS.find(a => Number(a.id) === Number(id))).filter(Boolean);
-  const ready = selected.filter(a => (a.codex_agent_status || '') === 'success');
-  if (!ready.length) { showToast('选中账号里没有已生成的 Agent Token'); return; }
-  if (!confirm(`确定下载选中的 ${ready.length} 个 Codex Agent Token 吗？\n\n未生成成功的账号会自动跳过，文件会打包 ZIP。`)) return;
-  const btn = $('#btnDownloadSelectedAgent');
-  const old = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = '下载中…';
-  try {
-    const frameName = 'codexAgentBulkDownloadFrame';
-    _ensureDownloadFrame(frameName);
-    const form = document.createElement('form');
-    form.method = 'POST';
-    form.action = '/api/accounts/codex-agent/download-bulk';
-    form.target = frameName;
-    form.style.display = 'none';
-    const input = document.createElement('input');
-    input.type = 'hidden';
-    input.name = 'account_ids';
-    input.value = JSON.stringify(ids);
-    form.appendChild(input);
-    document.body.appendChild(form);
-    form.submit();
-    setTimeout(() => form.remove(), 30000);
-    showToast('已提交 Agent Token ZIP 下载');
-  } catch(err) {
-    showToast('下载 Agent Token 失败: ' + err.message);
-  } finally {
-    setTimeout(() => {
-      btn.textContent = old;
-      updateAccountSelectionUi();
-    }, 1200);
-  }
-}
 
 async function checkSelectedPlans() {
   const ids = Array.from(ACCOUNT_SELECTED);

@@ -24,6 +24,9 @@ def test_accounts_txt_uses_email_password_totp_credentials_line():
     assert ">复制AT</button>" in text
     assert 'id="btnGenerateSelectedAgent"' not in text
     assert 'data-account-show-agent-token' not in text
+    assert "generateOneCodexAgent" not in text
+    assert "/api/accounts/codex-agent" not in text
+    assert "agent-token-cell" not in text
 
     assert ">复制Session</button>" in text
     assert "data-account-copy-secret=\"session\"" in text
