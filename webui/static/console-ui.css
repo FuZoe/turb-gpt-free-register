@@ -204,7 +204,7 @@ select:focus-visible, textarea:focus-visible {
 #tab-accounts > .card { container-type: normal; container-name: none; }
 #tab-accounts .table-wrap { overflow-x: auto; overflow-y: hidden; }
 #tab-accounts .accounts-table {
-  min-width: 1790px;
+  min-width: 1670px;
   table-layout: fixed;
   white-space: nowrap;
 }
@@ -215,7 +215,7 @@ select:focus-visible, textarea:focus-visible {
 #tab-accounts .accounts-table .col-note { width: 82px; }
 #tab-accounts .accounts-table .col-small { width: 190px; }
 #tab-accounts .accounts-table .col-status { width: 140px; }
-#tab-accounts .accounts-table .col-actions { width: 831px; }
+#tab-accounts .accounts-table .col-actions { width: 711px; }
 #tab-accounts .accounts-table tr { display: table-row; margin: 0; padding: 0; border: 0; border-radius: 0; }
 #tab-accounts .accounts-table td {
   display: table-cell;

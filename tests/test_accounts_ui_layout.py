@@ -22,7 +22,8 @@ def test_accounts_txt_uses_email_password_totp_credentials_line():
     assert "lines = await fetchAccountSecrets(ids, 'credentials_line');" in text
     assert "accounts-password-2fa-" in text
     assert ">复制AT</button>" in text
-    assert "data-account-show-agent-token" in text
+    assert 'id="btnGenerateSelectedAgent"' not in text
+    assert 'data-account-show-agent-token' not in text
 
     assert ">复制Session</button>" in text
     assert "data-account-copy-secret=\"session\"" in text
@@ -132,8 +133,9 @@ def test_console_ui_module_keeps_account_actions_grouped_and_available():
     css = (TEMPLATE.parent.parent / "static" / "console-ui.css").read_text(encoding="utf-8")
 
     assert "console-ui.css" in text
-    for label in ("凭据", "Agent", "账号", "Codex", "危险操作"):
+    for label in ("凭据", "账号", "Codex", "危险操作"):
         assert f'data-action-group="{label}"' in text
+    assert 'data-action-group="Agent"' not in text
     for action in (
         "data-account-copy-secret=\"access_token\"",
         "data-account-copy-secret=\"session\"",
@@ -153,5 +155,5 @@ def test_console_ui_module_keeps_account_actions_grouped_and_available():
     assert "grid-column: 1 / -1" in css
     assert "grid-template-columns: 38px minmax(240px, 1.45fr)" in css
     assert "one table row" in css
-    assert "min-width: 1790px" in css
+    assert "min-width: 1670px" in css
     assert "flex-wrap: nowrap" in css
