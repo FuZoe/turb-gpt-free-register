@@ -1,3 +1,6 @@
+Exit code: 0
+Wall time: 0.5 seconds
+Output:
 # -*- coding: utf-8 -*-
 """CloakBrowser 与协议 BrowserSession 之间的登录态桥接。"""
 from __future__ import annotations
@@ -241,18 +244,75 @@ def setup_cloak_password(driver: Any, email: str, proxy_url: str | None) -> str:
 
 
 def setup_cloak_2fa(driver: Any, email: str, proxy_url: str | None) -> str:
-    """基于 Cloak 的真实登录态调用 Turb 现有 2FA 协议流程。"""
-    from core.account_export import setup_2fa
+    """Browser-native 2FA via fetch() to avoid CF 403 on protocol HTTP."""
+    import pyotp
+    import time as _t
+    from urllib.parse import urlencode as _enc
+    from core.email_provider import wait_for_otp as _wotp
+    from core.humanize import delay as _hd
+    from core.roxy_registration import _click_resend_email_otp as _resend
 
-    session = build_browser_session_from_cloak(driver, proxy_url)
-    try:
-        # 浏览器阶段已经用页面内 /api/auth/session 确认了账号和 accessToken。
-        # 这里再次用协议会话请求同一接口容易触发 CF 403，并且对 2FA 重认证并非必要。
-        secret = setup_2fa(session, email)
-        sync_browser_session_to_cloak(driver, session)
-        return secret
-    finally:
+    logger.info("[Cloak 2FA] browser-native TOTP start")
+    did = str(driver.execute_script("return localStorage.getItem('oai-device-id') || '';") or "")
+
+    csrf = driver.execute_script("const r=await fetch('/api/auth/csrf');const d=await r.json();return d.csrfToken;")
+    logger.info("[Cloak 2FA] CSRF=%s...", csrf[:20])
+
+    cb = "https://chatgpt.com/?action=enable&factor=totp"
+    q = _enc({"connection":"password","login_hint":email,"reauth":"password","max_age":"0","ext-oai-did":did})
+    b = _enc({"callbackUrl":cb,"csrfToken":csrf,"json":"true"})
+    au = driver.execute_script(
+        "const r=await fetch(arguments[0],{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:arguments[1]});const d=await r.json();return d.url;",
+        f"https://chatgpt.com/api/auth/signin/openai?{q}", b,
+    )
+    logger.info("[Cloak 2FA] auth_url=%s...", au[:80])
+
+    ots = _t.time()
+    driver.get(au)
+    _hd("navigate")
+
+    otp = None
+    for rn in range(1, 4):
+        logger.info("[Cloak 2FA] OTP (%d/3)...", rn)
         try:
-            session.session.close()
-        except Exception:
-            pass
+            otp = _wotp(email, after_ts=ots, max_wait=60)
+            break
+        except Exception as e:
+            if rn >= 3: raise RuntimeError(f"OTP timeout: {e}") from e
+            logger.warning("[Cloak 2FA] resend (%d/3)", rn)
+            _resend(driver, timeout=25)
+            ots = _t.time()
+    logger.info("[Cloak 2FA] OTP=%s", otp)
+
+    cont = driver.execute_script(
+        "const r=await fetch('https://auth.openai.com/api/accounts/email-otp/validate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({code:arguments[0]})});const d=await r.json();return d.continue_url;",
+        otp,
+    )
+    if not cont: raise RuntimeError("OTP validate missing continue_url")
+
+    driver.get(cont)
+    _hd("navigate")
+
+    nat = driver.execute_script("const r=await fetch('/api/auth/session');const d=await r.json();return d.accessToken;")
+    logger.info("[Cloak 2FA] new AT=%s...", nat[:40])
+
+    lang = str(driver.execute_script("return navigator.language || 'en-US';") or "en-US")
+    dv2 = str(driver.execute_script("return localStorage.getItem('oai-device-id') || '';") or did)
+    enr = driver.execute_script(
+        "const r=await fetch('https://chatgpt.com/backend-api/accounts/mfa/enroll',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+arguments[0],'oai-device-id':arguments[1],'oai-language':arguments[2]},body:JSON.stringify({factor_type:'totp'})});const d=await r.json();return d;",
+        nat, dv2, lang,
+    )
+    if isinstance(enr, dict) and enr.get("error"): raise RuntimeError(f"enroll: {enr}")
+    sec = enr.get("secret") or enr.get("totp_secret")
+    sid = enr.get("session_id")
+    if not sec or not sid: raise RuntimeError(f"enroll missing fields: {enr}")
+    logger.info("[Cloak 2FA] secret=%s...%s", sec[:4], sec[-4:])
+
+    code = pyotp.TOTP(str(sec)).now()
+    act = driver.execute_script(
+        "const r=await fetch('https://chatgpt.com/backend-api/accounts/mfa/user/activate_enrollment',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+arguments[0],'oai-device-id':arguments[1],'oai-language':arguments[2]},body:JSON.stringify({code:arguments[3],factor_type:'totp',session_id:arguments[4]})});const d=await r.json();return d;",
+        nat, dv2, lang, str(code), str(sid),
+    )
+    if not act.get("success"): raise RuntimeError(f"activate: {act}")
+    logger.info("[Cloak 2FA] done: %s", email)
+    return str(sec)
