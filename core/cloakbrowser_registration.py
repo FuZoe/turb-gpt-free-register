@@ -96,24 +96,24 @@ def _run_cloak_registration_impl(email: str, name: str, birthday: str, proxy: st
         next_state = _submit_email_and_wait_next(driver, email, attempts=3)
         _check_manual_stop()
 
-        require_password = bool(getattr(_cfg, "CLOAK_ENABLE_PASSWORD", False))
-        if require_password:
-            otp_after_ts = time.time()
-            logger.info("[Cloak注册][浏览器密码] 使用当前认证页进入密码创建流程")
-            if next_state == "otp" and not _open_signup_password_from_otp(driver, timeout=25):
+                require_password = bool(getattr(_cfg, "CLOAK_ENABLE_PASSWORD", True))
+        if next_state == "otp" and require_password:
+            logger.info('[Cloak注册][密码优先] 从邮箱验证码页点击"使用密码继续"进入密码创建流程')
+            if not _open_signup_password_from_otp(driver, timeout=25):
                 raise RuntimeError("OTP 页未进入密码创建流程")
             openai_password = _fill_password_page_if_present(
                 driver,
                 email,
-                timeout=30,
+                timeout=35,
                 prefer_password=True,
             )
             if not openai_password:
-                raise RuntimeError("Cloak 密码创建流程未返回密码")
-            logger.info("[Cloak注册][浏览器密码] 密码创建完成：email=%s password_length=%s", email, len(openai_password))
+                raise RuntimeError("密码创建流程未返回密码（提交后未回到邮箱验证码页）")
+            logger.info("[Cloak注册][密码优先] 密码创建完成，已回到邮箱验证码页：email=%s password_length=%s", email, len(openai_password))
+        elif next_state == "password":
+            openai_password = _fill_password_page_if_present(driver, email, timeout=25)
         else:
-            openai_password = None if next_state == "otp" else _fill_password_page_if_present(driver, email, timeout=25)
-        _check_manual_stop()
+            openai_password = None_check_manual_stop()
 
         current_otp = otp_code
         max_otp_attempts = 3
