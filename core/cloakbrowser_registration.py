@@ -96,7 +96,7 @@ def _run_cloak_registration_impl(email: str, name: str, birthday: str, proxy: st
         next_state = _submit_email_and_wait_next(driver, email, attempts=3)
         _check_manual_stop()
 
-                require_password = bool(getattr(_cfg, "CLOAK_ENABLE_PASSWORD", True))
+        require_password = bool(getattr(_cfg, "CLOAK_ENABLE_PASSWORD", True))
         if next_state == "otp" and require_password:
             logger.info('[Cloak注册][密码优先] 从邮箱验证码页点击"使用密码继续"进入密码创建流程')
             if not _open_signup_password_from_otp(driver, timeout=25):
@@ -113,7 +113,8 @@ def _run_cloak_registration_impl(email: str, name: str, birthday: str, proxy: st
         elif next_state == "password":
             openai_password = _fill_password_page_if_present(driver, email, timeout=25)
         else:
-            openai_password = None_check_manual_stop()
+            openai_password = None
+        _check_manual_stop()
 
         current_otp = otp_code
         max_otp_attempts = 3
