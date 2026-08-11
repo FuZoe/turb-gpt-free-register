@@ -205,7 +205,7 @@ def import_from_file(path: str | Path | None = None) -> tuple[int, int]:
         parts = [x.strip() for x in parts]
         if len(parts) < 2:
             continue
-        records.append({"email": parts[0], "code_url": parts[1]})
+        records.append({"email": parts[0], "code_url": parts[-1]})
     return import_generic_api_emails(records)
 
 
