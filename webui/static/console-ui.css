@@ -260,8 +260,9 @@ select:focus-visible, textarea:focus-visible {
 
 /* Public console shell: compact, information-first components. */
 :root {
-  --page-max-width: 1120px;
-  --page-gutter: 24px;
+  /* Desktop operations need the whole canvas: account rows are deliberately single-line. */
+  --page-max-width: 1840px;
+  --page-gutter: clamp(16px, 2vw, 32px);
   --bg: #f7f8fa;
   --surface: #ffffff;
   --soft: #fbfcfd;
