@@ -436,11 +436,42 @@
       background: #fff; color: var(--blue); text-decoration: none; font-size: 12px; font-weight: 800;
     }
     .roxy-invite-link:hover { background: #e0ebff; }
+
+    /* -- loading bar -- */
+    #loadingBar {
+      position: fixed; top: 0; left: 0; z-index: 99999; width: 0; height: 3px;
+      background: linear-gradient(90deg, #2563eb, #10b981);
+      transition: width .35s ease, opacity .25s ease .5s;
+      opacity: 0; pointer-events: none;
+      box-shadow: 0 0 10px rgba(37,99,235,.55);
+    }
+    #loadingBar.show { width: 92%; opacity: 1; }
+    #loadingBar.done { width: 100%; opacity: 0; transition: width .25s ease, opacity .25s ease; }
+    /* -- tab loading overlay -- */
+    .tab-loading {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 14px; min-height: 260px; padding: 44px 20px; color: var(--muted);
+      font-size: 13px; font-weight: 600;
+    }
+    .tab-loading .dot-pulse {
+      display: inline-flex; gap: 6px;
+    }
+    .tab-loading .dot-pulse span {
+      width: 9px; height: 9px; border-radius: 999px; background: var(--blue);
+      animation: pulse 1.2s ease-in-out infinite;
+    }
+    .tab-loading .dot-pulse span:nth-child(2) { animation-delay: .2s; }
+    .tab-loading .dot-pulse span:nth-child(3) { animation-delay: .4s; }
+    @keyframes pulse {
+      0%, 80%, 100% { transform: scale(.4); opacity: .3; }
+      40% { transform: scale(1); opacity: 1; }
+    }
   </style>
-  <link rel="stylesheet" href="{{ url_for('static', filename='console-ui.css', v='20260811-ui6') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='console-ui.css', v='20260811-ui7') }}">
 </head>
 <body>
 <header>
+  <div id="loadingBar"></div>
   <div class="header-inner">
     <div>
       <h1>GPT 注册控制台</h1>
@@ -976,11 +1007,32 @@ async function copyText(text) {
     showToast('已复制');
   } catch(e) { showToast('复制失败'); }
 }
+let _apiPending = 0, _apiBarTimer = null;
+function _loadingStart() {
+  _apiPending++;
+  clearTimeout(_apiBarTimer);
+  const bar = document.getElementById('loadingBar');
+  if (bar) { bar.classList.remove('done'); bar.classList.add('show'); }
+}
+function _loadingDone() {
+  _apiPending = Math.max(0, _apiPending - 1);
+  if (_apiPending === 0) {
+    _apiBarTimer = setTimeout(() => {
+      const bar = document.getElementById('loadingBar');
+      if (bar) { bar.classList.replace('show', 'done'); }
+    }, 80);
+  }
+}
 async function api(url, opts) {
-  const r = await fetch(url, opts);
-  const j = await r.json().catch(()=>({}));
-  if (!r.ok) throw new Error(j.error || ('HTTP '+r.status));
-  return j;
+  _loadingStart();
+  try {
+    const r = await fetch(url, opts);
+    const j = await r.json().catch(()=>({}));
+    if (!r.ok) throw new Error(j.error || ('HTTP '+r.status));
+    return j;
+  } finally {
+    _loadingDone();
+  }
 }
 function debounce(fn, wait=250) {
   let t = null;
@@ -1029,6 +1081,14 @@ function activateTab(tab, persist=true, pushState=true) {
   if (persist) localStorage.setItem('gpt_console_active_tab', tab);
   if (pushState && location.hash !== '#'+tab) {
     history.pushState({tab}, '', '#'+tab);
+  }
+  // show loading overlay on tab content area
+  const tabEl = document.getElementById('tab-'+tab);
+  if (tabEl && !tabEl.querySelector('.tab-loading')) {
+    const loader = document.createElement('div');
+    loader.className = 'tab-loading';
+    loader.innerHTML = '<div class="dot-pulse"><span></span><span></span><span></span></div><div>加载中…</div>';
+    tabEl.insertBefore(loader, tabEl.firstChild);
   }
   if (tab === 'accounts') loadAccounts();
   if (tab === 'codex') loadCodex();
@@ -1739,7 +1799,8 @@ async function pollLog() {
     const r = await api(`/api/jobs/${activeLogJob}/log`);
     const c = $('#logContent');
     const atBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 30;
-    c.textContent = r.log || '(暂无日志)';
+    const newText = r.log || '(暂无日志)';
+    if (c.textContent !== newText) c.textContent = newText;
     if (atBottom) c.scrollTop = c.scrollHeight;
     if (r.job && ['success','failed','stopped','cancelled'].includes(r.job.status)) clearInterval(logTimer);
   } catch(e) {}
