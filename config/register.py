@@ -17,5 +17,13 @@ REGISTER_PASSWORD = ""
 # OpenAI 限制：name_invalid_chars —— 只允许字母和空格
 REGISTER_NAME = ""
 
+# Cloudflare/代理导航失败后自动创建换线路任务的次数。0 表示关闭。
+REGISTRATION_CF_AUTO_RETRIES = 3
+
 # ---- .env overrides for WebUI editable fields ----
-apply_env_overrides(globals(), {'REGISTER_EMAIL': 'str', 'REGISTER_PASSWORD': 'str', 'REGISTER_NAME': 'str'})
+apply_env_overrides(globals(), {
+    'REGISTER_EMAIL': 'str',
+    'REGISTER_PASSWORD': 'str',
+    'REGISTER_NAME': 'str',
+    'REGISTRATION_CF_AUTO_RETRIES': 'int',
+})

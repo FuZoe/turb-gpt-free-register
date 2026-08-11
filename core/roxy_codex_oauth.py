@@ -466,16 +466,17 @@ def _wait_after_email_otp_submit(driver, timeout: int = 45) -> str:
 
             state = _email_otp_page_state(driver)
             invalid = any(str(i.get("ariaInvalid") or "").lower() == "true" for i in (state.get("inputs") or []))
-            errors = [str(x) for x in (state.get("errors") or []) if str(x).strip()]
             body_text = str(state.get("text") or "").lower()
             error_hit = any(x in body_text for x in (
                 "invalid code", "incorrect code", "wrong code", "expired",
                 "验证码错误", "验证码无效", "验证码已过期", "コードが正しく", "無効", "期限",
             ))
-            if invalid or errors or error_hit:
+            # 页面诊断器的 errors 列表也会收集脚本片段/资源提示；只有明确
+            # 的验证码错误文案或 aria-invalid 才能判定本次验证码无效。
+            if invalid or error_hit:
                 logger.warning(
                     "[Codex][Browser] 邮箱 OTP 提交后检测到错误/仍需验证码：errors=%s invalid=%s url=%s",
-                    errors[:3],
+                    (state.get("errors") or [])[:3],
                     invalid,
                     url,
                 )

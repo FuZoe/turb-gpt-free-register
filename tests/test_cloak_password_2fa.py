@@ -8,7 +8,10 @@ from core.cloakbrowser_session import (
     setup_cloak_2fa,
     sync_browser_session_to_cloak,
 )
+from core.cloakbrowser_driver import CloakElement
 from core.openai_auth import follow_password_registration, register_user
+from core import account_export
+from config import email as email_cfg
 from core.db import _account_credentials_line
 from webui.app import _account_secret_value
 from webui.config_editor import EDITABLE_FIELDS
@@ -225,21 +228,46 @@ def test_protocol_password_flow_follows_relative_otp_url():
     assert kwargs["allow_redirects"] is True
 
 
-def test_setup_cloak_2fa_validates_session_and_syncs_cookies():
+def test_setup_cloak_2fa_starts_reauth_directly_and_syncs_cookies():
     driver = FakeDriver()
     session = build_browser_session_from_cloak(driver, "")
     with (
         patch("core.cloakbrowser_session.build_browser_session_from_cloak", return_value=session),
-        patch("core.account_export.fetch_session", return_value={"user": {"email": "user@example.test"}}) as fetch,
         patch("core.account_export.setup_2fa", return_value="TOTPSECRET") as setup,
         patch("core.cloakbrowser_session.sync_browser_session_to_cloak", return_value=2) as sync,
     ):
         secret = setup_cloak_2fa(driver, "user@example.test", "")
 
     assert secret == "TOTPSECRET"
-    fetch.assert_called_once_with(session)
     setup.assert_called_once_with(session, "user@example.test")
     sync.assert_called_once_with(driver, session)
+
+
+def test_setup_2fa_restarts_reauth_when_mailbox_stays_on_old_code(monkeypatch):
+    session = MagicMock()
+    starts = iter(("https://auth.openai.com/email-verification", "https://auth.openai.com/email-verification"))
+    otp_calls = []
+
+    monkeypatch.setattr(account_export, "_trigger_reauth", lambda _session, _email: next(starts))
+    monkeypatch.setattr(account_export, "_follow_reauth", lambda _session, _url: None)
+    monkeypatch.setattr(account_export, "human_delay", lambda _stage: None)
+    monkeypatch.setattr(email_cfg, "USE_EMAIL_SERVICE", True)
+
+    def fake_wait(_email, **kwargs):
+        otp_calls.append(kwargs)
+        if len(otp_calls) == 1:
+            raise RuntimeError("old OTP only")
+        return "123456"
+
+    monkeypatch.setattr("core.email_provider.wait_for_otp", fake_wait)
+    monkeypatch.setattr(account_export, "_validate_reauth_otp", lambda _session, _code: "continue-url")
+    monkeypatch.setattr(account_export, "_exchange_new_token", lambda _session, _url: "new-token")
+    monkeypatch.setattr(account_export, "_enroll_totp", lambda _session, _token: ("SECRET", "session"))
+    monkeypatch.setattr(account_export, "_activate_totp", lambda *_args: True)
+
+    assert account_export.setup_2fa(session, "user@example.test") == "SECRET"
+    assert len(otp_calls) == 2
+    assert otp_calls[0]["max_wait"] == 60
 
 
 def test_cloak_password_fields_are_exposed_in_webui():
@@ -260,3 +288,11 @@ def test_credentials_line_contains_chatgpt_password_and_totp():
     assert _account_credentials_line(row) == expected
     assert _account_secret_value(row, "credentials_line") == expected
     assert _account_secret_value(row, "registration_password") == "StrongPass!234"
+
+
+def test_cloak_element_exposes_selenium_text_property():
+    locator = MagicMock()
+    locator.inner_text.return_value = "メールを再送信する"
+    element = CloakElement(page=MagicMock(), locator=locator)
+
+    assert element.text == "メールを再送信する"

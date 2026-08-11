@@ -11,6 +11,8 @@
 """
 from config.env_loader import apply_env_overrides
 import random
+import threading
+import time
 
 
 # 本地代理入口；实际出口地区以代理/分流规则为准。
@@ -46,10 +48,33 @@ PLAN_CHECK_QUEUE_LIMIT = 500
 PLAN_CHECK_MIN_INTERVAL = 0.4
 PLAN_CHECK_JITTER = 0.3
 
+_BAD_PROXY_UNTIL: dict[str, float] = {}
+_BAD_PROXY_LOCK = threading.Lock()
+
+
+def mark_proxy_temporarily_bad(proxy: str, ttl_seconds: float = 600) -> None:
+    value = str(proxy or "").strip()
+    if not value:
+        return
+    with _BAD_PROXY_LOCK:
+        _BAD_PROXY_UNTIL[value] = max(
+            _BAD_PROXY_UNTIL.get(value, 0.0),
+            time.monotonic() + max(1.0, float(ttl_seconds)),
+        )
+
 
 def pick_proxy() -> str:
     """从代理池中随机抽取一个代理 URL；池为空时返回空串（即不使用代理）。"""
-    return random.choice(PROXY_POOL) if PROXY_POOL else ""
+    if not PROXY_POOL:
+        return ""
+    now = time.monotonic()
+    with _BAD_PROXY_LOCK:
+        expired = [proxy for proxy, until in _BAD_PROXY_UNTIL.items() if until <= now]
+        for proxy in expired:
+            _BAD_PROXY_UNTIL.pop(proxy, None)
+        candidates = [proxy for proxy in PROXY_POOL if _BAD_PROXY_UNTIL.get(proxy, 0.0) <= now]
+    # 所有线路都进入冷却时仍从完整池取一条，避免服务彻底停摆。
+    return random.choice(candidates or PROXY_POOL)
 
 
 # 兼容入口：默认每次进程启动随机选一个，作为本次注册全程的固定代理

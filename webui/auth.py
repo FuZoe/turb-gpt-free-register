@@ -27,6 +27,8 @@ _GENERATED = False
 # 代理管理操作的是同一份 Mihomo 配置，不属于任何租户的数据目录。默认只额外
 # 放行用户指定的朋友租户；部署时可用环境变量覆盖或追加其他租户。
 _DEFAULT_SHARED_PROXY_MANAGER_TENANTS = frozenset({"tenant2"})
+# 朋友租户也需要使用运行配置页；部署时可通过 WEBUI_CONFIG_TENANTS 覆盖。
+_DEFAULT_CONFIG_TENANTS = frozenset({"tenant2"})
 
 
 def _shared_proxy_manager_tenants() -> set[str]:
@@ -50,12 +52,26 @@ def can_manage_shared_proxies(tenant_id: str) -> bool:
     return normalize_tenant_id(tenant_id) in _shared_proxy_manager_tenants()
 
 
-def _request_context_tenant(tenant_id: str) -> str:
-    """仅为代理管理 API 切换到共享全局上下文，其他数据仍保持租户隔离。"""
-    path = str(request.path or "").rstrip("/")
-    if (path == "/api/proxy-manager" or path.startswith("/api/proxy-manager/")) and can_manage_shared_proxies(tenant_id):
-        return DEFAULT_TENANT
-    return tenant_id
+def _config_tenants() -> set[str]:
+    """返回允许读写全局运行配置的租户集合。"""
+    raw = str(os.getenv("WEBUI_CONFIG_TENANTS", "") or "").strip()
+    if not raw:
+        tenants = set(_DEFAULT_CONFIG_TENANTS)
+    else:
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            parsed = None
+        values = parsed if isinstance(parsed, list) else raw.replace("\n", ",").split(",")
+        tenants = {normalize_tenant_id(value) for value in values if str(value or "").strip()}
+    tenants.add(DEFAULT_TENANT)
+    return tenants
+
+
+def can_manage_config(tenant_id: str) -> bool:
+    """判断租户是否可读写管理员的全局运行配置。"""
+    return normalize_tenant_id(tenant_id) in _config_tenants()
+
 
 
 def _parse_tenant_codes(raw: str) -> dict[str, str]:
@@ -195,10 +211,7 @@ def register_auth_routes(app: Any) -> None:
         tenant_id = request_tenant()
         if tenant_id:
             g.webui_tenant = tenant_id
-            # 代理管理后端原本通过 current_tenant() == "default" 保护全局
-            # Mihomo 配置。对 allowlist 租户只在这组 API 内映射为 default，
-            # 无需复制代理池，也不会放开配置、账号、邮箱和任务数据。
-            g._tenant_context_token = set_current_tenant(_request_context_tenant(tenant_id))
+            g._tenant_context_token = set_current_tenant(tenant_id)
             return None
         return _unauthorized_response()
 

@@ -54,6 +54,10 @@ EDITABLE_FIELDS = [
         "key": "REGISTRATION_DRIVER", "file": "roxybrowser.py", "type": "str", "group": "注册方式",
         "label": "注册驱动", "help": "默认推荐 roxy；protocol=纯协议，容易封号不建议；roxy=RoxyBrowser；cloak=CloakBrowser；browser_use=Browser Use Cloud+Playwright；skyvern=Skyvern Browser Sessions+Playwright",
     },
+    {
+        "key": "REGISTRATION_CF_AUTO_RETRIES", "file": "register.py", "type": "int", "group": "注册方式",
+        "label": "失败自动重试次数", "help": "Cloudflare 或代理导航失败后自动换线路重试；0=关闭，1=失败后再试一次，最大 10",
+    },
 
     # ---- CloakBrowser ----
     {
@@ -439,29 +443,25 @@ EDITABLE_FIELDS = [
 
     # ---- 代理池 ----
     {
-        "key": "PROXY_POOL", "file": "proxy.py", "type": "list_str_multiline", "group": "代理池",
-        "label": "代理池(每行一个)", "help": "每行一个代理 URL，留空行会被忽略；为空则不使用代理",
-    },
-    {
         "key": "PLAN_CHECK_PROXY_MODE", "file": "proxy.py", "type": "str", "group": "代理池",
-        "label": "套餐/Agent网络模式", "help": "用于查套餐和生成 Agent Token；auto=本地代理可用则走代理、未监听则直连；proxy=强制代理；direct=强制直连",
+        "label": "套餐查询网络模式", "help": "用于套餐与资格查询；auto=本地代理可用则走代理、未监听则直连；proxy=强制代理；direct=强制直连",
     },
     {
         "key": "PLAN_CHECK_PROXY", "file": "proxy.py", "type": "str", "group": "代理池",
-        "label": "套餐/Agent专用代理", "help": "用于查套餐和生成 Agent Token；留空时 auto/proxy 从代理池选择。可能包含认证信息，仅保存到 .env",
+        "label": "套餐查询专用代理", "help": "用于套餐与资格查询；留空时 auto/proxy 从代理池选择。可能包含认证信息，仅保存到 .env",
         "storage": "env", "secret": True,
     },
     {
         "key": "PLAN_CHECK_TIMEOUT", "file": "proxy.py", "type": "float", "group": "代理池",
-        "label": "套餐/Agent超时(秒)", "help": "查套餐和生成 Agent Token 的单次请求超时，建议 10-20 秒；独立于注册请求超时",
+        "label": "套餐查询超时(秒)", "help": "套餐与资格查询的单次请求超时，建议 10-20 秒；独立于注册请求超时",
     },
     {
         "key": "PLAN_CHECK_MAX_ATTEMPTS", "file": "proxy.py", "type": "int", "group": "代理池",
-        "label": "套餐/Agent最大尝试次数", "help": "查套餐和生成 Agent Token 遇到网络错误、429、5xx 等临时错误时的重试次数，建议 2 次",
+        "label": "套餐查询最大尝试次数", "help": "套餐查询遇到网络错误、429、5xx 等临时错误时的重试次数，建议 2 次",
     },
     {
         "key": "PLAN_CHECK_RETRY_DELAY", "file": "proxy.py", "type": "float", "group": "代理池",
-        "label": "套餐/Agent重试间隔(秒)", "help": "查套餐和生成 Agent Token 的重试间隔，按尝试次数递增；服务端 Retry-After 优先",
+        "label": "套餐查询重试间隔(秒)", "help": "套餐查询的重试间隔，按尝试次数递增；服务端 Retry-After 优先",
     },
     {
         "key": "PLAN_CHECK_REGISTRATION_RECHECK_DELAY", "file": "proxy.py", "type": "float", "group": "代理池",
@@ -469,7 +469,7 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "PLAN_CHECK_WORKERS", "file": "proxy.py", "type": "int", "group": "代理池",
-        "label": "套餐查询并发数", "help": "自动、手动和批量查套餐共用；Agent Token 生成使用独立队列；建议 2-4 个线程",
+        "label": "套餐查询并发数", "help": "自动、手动和批量查套餐共用，建议 2-4 个线程",
     },
     {
         "key": "PLAN_CHECK_QUEUE_LIMIT", "file": "proxy.py", "type": "int", "group": "代理池",
@@ -477,25 +477,29 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "PLAN_CHECK_MIN_INTERVAL", "file": "proxy.py", "type": "float", "group": "代理池",
-        "label": "套餐/Agent请求最小间隔(秒)", "help": "限制查套餐和生成 Agent Token 的请求启动频率，降低 429 风险",
+        "label": "套餐请求最小间隔(秒)", "help": "限制套餐与资格查询的请求启动频率，降低 429 风险",
     },
     {
         "key": "PLAN_CHECK_JITTER", "file": "proxy.py", "type": "float", "group": "代理池",
-        "label": "套餐/Agent请求随机抖动(秒)", "help": "在查套餐和生成 Agent Token 的最小间隔上增加随机延迟，避免请求过于规律",
+        "label": "套餐请求随机抖动(秒)", "help": "在套餐查询最小间隔上增加随机延迟，避免请求过于规律",
     },
     # ---- 提链 ----
     {
         "key": "EXTRACT_LINK_API_BASE", "file": "extract_link.py", "type": "str", "group": "提链",
-        "label": "提链服务地址", "help": "填写提链服务 API 地址",
+        "label": "内置UPI服务地址", "help": "注册机内置UPI提链服务地址，默认 https://upi.newzoe.cloud",
+    },
+    {
+        "key": "EXTRACT_LINK_EXTERNAL_IDEAL_API_BASE", "file": "extract_link.py", "type": "str", "group": "提链",
+        "label": "外部荷兰iDEAL地址", "help": "外部iDEAL服务地址，默认 https://ideal.169abc.xyz；CDK由用户提交任务时填写",
     },
     {
         "key": "EXTRACT_LINK_CDK", "file": "extract_link.py", "type": "str", "group": "提链",
-        "label": "提链 CDK", "help": "创建提链任务和监听任务事件使用；成功提链扣 1 次",
+        "label": "内置UPI CDK", "help": "仅供内置UPI渠道使用；外部荷兰iDEAL CDK由用户每次提交任务时填写",
         "storage": "env", "secret": True,
     },
     {
         "key": "EXTRACT_LINK_TYPE", "file": "extract_link.py", "type": "str", "group": "提链",
-        "label": "提链类型", "help": "支持 pix / upi / kakao_pay / ideal",
+        "label": "提链类型", "help": "upi.newzoe.cloud 当前固定为 upi",
     },
     {
         "key": "EXTRACT_LINK_WORKERS", "file": "extract_link.py", "type": "int", "group": "提链",
@@ -503,16 +507,8 @@ EDITABLE_FIELDS = [
     },
     # ---- Codex 配置 ----
     {
-        "key": "SUB2API_AUTO_EXPORT", "file": "sub2api.py", "type": "bool", "group": "Codex",
-        "label": "Agent sub2 自动同步", "help": "生成 Codex Agent Token 成功后自动同步到 sub2api",
-    },
-    {
-        "key": "SUB2API_SYNC_MODE", "file": "sub2api.py", "type": "str", "group": "Codex",
-        "label": "Agent sub2 同步模式", "help": "api=直接上传接口；file=写本地json；both=接口+本地json",
-    },
-    {
         "key": "SUB2API_API_BASE", "file": "sub2api.py", "type": "str", "group": "Codex",
-        "label": "sub2 API基址", "help": "sub2api 服务地址；Agent Token 上传和 Codex OAuth 共用，例如 http://127.0.0.1:8080",
+        "label": "sub2 API基址", "help": "sub2api Codex OAuth 服务地址，例如 http://127.0.0.1:8080",
     },
     {
         "key": "SUB2API_API_KEY", "file": "sub2api.py", "type": "str", "group": "Codex",
@@ -521,14 +517,6 @@ EDITABLE_FIELDS = [
     {
         "key": "SUB2API_API_TIMEOUT", "file": "sub2api.py", "type": "int", "group": "Codex",
         "label": "sub2 超时", "help": "sub2api 请求超时秒数",
-    },
-    {
-        "key": "SUB2API_OUTPUT_PATH", "file": "sub2api.py", "type": "str", "group": "Codex",
-        "label": "Agent sub2 本地路径", "help": "仅 SUB2API_SYNC_MODE=file/both 时使用；相对路径按项目根目录解析",
-    },
-    {
-        "key": "SUB2API_PROXY_KEY", "file": "sub2api.py", "type": "str", "group": "Codex",
-        "label": "Agent sub2 代理键", "help": "可选；写入 account.proxy_key，并在 proxies 为空时初始化 proxies[0].proxy_key",
     },
     # ---- 接码平台 ----
     # ---- Codex：基础 / CPA / sub2api 配置 ----

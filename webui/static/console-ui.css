@@ -1,0 +1,462 @@
+/* Console UI module: reusable action controls and dense operational tables. */
+:root {
+  --ui-control-height: 38px;
+  --ui-action-height: 31px;
+  --ui-radius: 7px;
+  --ui-subtle: #667085;
+  --ui-border: #d9e1ea;
+  --ui-hover: #f0f5ff;
+  --ui-blue: #175cd3;
+  --ui-red: #b42318;
+  --page-max-width: 1900px;
+}
+
+/* Shared controls: all commands keep a stable, finger-sized target. */
+button, .btn, .pager-bar button, .config-tabs button, .config-subtabs button {
+  min-height: var(--ui-control-height);
+  border-radius: var(--ui-radius);
+  font-size: 13px;
+  letter-spacing: 0;
+}
+
+button:focus-visible, .btn:focus-visible, input:focus-visible,
+select:focus-visible, textarea:focus-visible {
+  outline: 3px solid rgba(23, 92, 211, .24);
+  outline-offset: 2px;
+}
+
+.toolbar, .accounts-toolbar { gap: 16px; }
+.buttons, .accounts-actionbar { gap: 10px; }
+
+.btn-group {
+  border: 1px solid var(--ui-border);
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 8px;
+  gap: 7px;
+}
+
+.btn-group-title {
+  color: var(--ui-subtle);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.accounts-actionbar { align-items: stretch; }
+.accounts-toolbar .btn { min-height: 36px; padding-inline: 13px; font-size: 13px; }
+
+/* Account rows intentionally use a smaller command size, but no tiny chips. */
+.accounts-table { font-size: 13px; }
+.accounts-table th, .accounts-table td { padding: 10px 9px; }
+.accounts-table .main-cell { font-size: 13px; line-height: 1.4; }
+.accounts-table .sub-cell, .accounts-table .mono { font-size: 12px; }
+.accounts-table .col-actions { width: 650px; }
+.accounts-table .actions { gap: 7px; }
+.accounts-table .actions button, .account-secret-cell button,
+.accounts-table .extract-link-btn {
+  min-height: var(--ui-action-height);
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.15;
+}
+
+.account-row-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(260px, 1fr));
+  gap: 8px;
+  align-items: stretch;
+}
+
+.account-action-group {
+  position: relative;
+  display: flex;
+  align-items: center;
+  align-content: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 50px;
+  padding: 21px 7px 7px;
+  border: 1px solid var(--ui-border);
+  border-radius: 7px;
+  background: #fbfcfe;
+}
+
+.account-action-group::before {
+  position: absolute;
+  top: 6px;
+  left: 8px;
+  color: var(--ui-subtle);
+  content: attr(data-action-group);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.account-action-group[data-action-group="凭据"] { background: #f7fbff; border-color: #c7ddf7; }
+.account-action-group[data-action-group="账号"] { background: #fffdf6; border-color: #efdfae; }
+.account-action-group[data-action-group="Codex"] { background: #faf8ff; border-color: #ded2f7; }
+.account-action-group.danger-zone { background: #fff8f8; border-color: #f2c9c6; }
+.account-action-group.danger-zone::before { color: var(--ui-red); }
+
+.account-action-group button { box-shadow: none; }
+.account-action-group button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: #8caee8;
+  background: var(--ui-hover);
+  box-shadow: 0 3px 8px rgba(16, 24, 40, .10);
+}
+.account-action-group button.primary { background: var(--ui-blue); border-color: var(--ui-blue); color: #fff; }
+.account-action-group button.good { background: #eaf8f0; border-color: #9ed8b7; color: #05603a; }
+.account-action-group button.danger { background: #fff; border-color: #efb7b3; color: var(--ui-red); }
+.account-secret-cell, .extract-link-cell { gap: 7px; }
+.runtime-resource { min-width: 232px; padding: 12px 14px; }
+
+/* The account table becomes cards based on its own available width, not viewport width. */
+#tab-accounts > .card { container: account-list / inline-size; }
+
+@container account-list (max-width: 1700px) {
+  .accounts-toolbar .search { min-width: min(100%, 280px); }
+  .accounts-table colgroup,
+  .accounts-table thead { display: none; }
+  .accounts-table,
+  .accounts-table tbody { display: block; width: 100%; table-layout: auto; }
+  .accounts-table tr {
+    display: grid;
+    grid-template-columns: 38px minmax(240px, 1.45fr) minmax(250px, 1.35fr) minmax(160px, .75fr) minmax(90px, .5fr);
+    grid-template-rows: minmax(40px, auto) minmax(24px, auto) auto;
+    gap: 8px 14px;
+    width: auto;
+    margin: 10px;
+    padding: 12px;
+    border: 1px solid var(--ui-border);
+    border-radius: 8px;
+    background: #fff;
+  }
+  .accounts-table td {
+    display: block;
+    width: auto !important;
+    min-width: 0;
+    overflow: visible !important;
+    padding: 0;
+    border: 0;
+    white-space: normal;
+    text-overflow: clip;
+  }
+  .accounts-table tbody tr:hover td { background: transparent; }
+  .accounts-table td:nth-child(1) { grid-column: 1; grid-row: 1 / span 2; padding-top: 3px; }
+  .accounts-table td:nth-child(2) {
+    grid-column: 2;
+    grid-row: 1;
+    z-index: 1;
+    color: var(--ui-subtle);
+    font-size: 12px;
+    font-weight: 800;
+  }
+  .accounts-table td:nth-child(3) { grid-column: 2; grid-row: 1 / span 2; padding-top: 20px; overflow-wrap: anywhere; }
+  .accounts-table td:nth-child(4) { grid-column: 3; grid-row: 1; }
+  .accounts-table td:nth-child(5) { grid-column: 3; grid-row: 2; }
+  .accounts-table td:nth-child(6) { grid-column: 4; grid-row: 1 / span 2; }
+  .accounts-table td:nth-child(7) { grid-column: 5; grid-row: 1 / span 2; }
+  .accounts-table td:nth-child(8) { grid-column: 1 / -1; grid-row: 3; padding-top: 8px; border-top: 1px solid #e7edf3; }
+  .accounts-table td:nth-child(4)::before,
+  .accounts-table td:nth-child(5)::before,
+  .accounts-table td:nth-child(6)::before,
+  .accounts-table td:nth-child(7)::before {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--ui-subtle);
+    font-size: 11px;
+    font-weight: 800;
+  }
+  .accounts-table td:nth-child(4)::before { content: "套餐"; }
+  .accounts-table td:nth-child(5)::before { content: "备注"; }
+  .accounts-table td:nth-child(6)::before { content: "密码 / 2FA"; }
+  .accounts-table td:nth-child(7)::before { content: "Codex"; }
+  .account-row-actions { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+  .account-action-group { min-width: 0; }
+  .table-wrap { overflow: visible; }
+}
+
+@container account-list (max-width: 860px) {
+  .accounts-table tr { grid-template-columns: 34px minmax(0, 1fr); grid-template-rows: auto; }
+  .accounts-table td:nth-child(1) { grid-column: 1; grid-row: 1 / span 5; }
+  .accounts-table td:nth-child(2) { grid-column: 2; grid-row: 1; }
+  .accounts-table td:nth-child(3) { grid-column: 2; grid-row: 1; padding-top: 20px; }
+  .accounts-table td:nth-child(4),
+  .accounts-table td:nth-child(5),
+  .accounts-table td:nth-child(6),
+  .accounts-table td:nth-child(7) { grid-column: 2; grid-row: auto; }
+  .accounts-table td:nth-child(8) { grid-column: 1 / -1; grid-row: auto; }
+  .account-row-actions { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 760px) {
+  :root { --ui-control-height: 42px; --ui-action-height: 36px; }
+  .accounts-toolbar .search { min-width: 100%; }
+  .btn-group { width: 100%; }
+  .account-row-actions { min-width: 0; }
+}
+
+/* Final account-list layout: one account is always one table row. */
+#tab-accounts > .card { container-type: normal; container-name: none; }
+#tab-accounts .table-wrap { overflow-x: auto; overflow-y: hidden; }
+#tab-accounts .accounts-table {
+  min-width: 1670px;
+  table-layout: fixed;
+  white-space: nowrap;
+}
+#tab-accounts .accounts-table .col-check { width: 34px; }
+#tab-accounts .accounts-table .col-id { width: 48px; }
+#tab-accounts .accounts-table .col-email { width: 220px; }
+#tab-accounts .accounts-table .col-plan { width: 245px; }
+#tab-accounts .accounts-table .col-note { width: 82px; }
+#tab-accounts .accounts-table .col-small { width: 190px; }
+#tab-accounts .accounts-table .col-status { width: 140px; }
+#tab-accounts .accounts-table .col-actions { width: 711px; }
+#tab-accounts .accounts-table tr { display: table-row; margin: 0; padding: 0; border: 0; border-radius: 0; }
+#tab-accounts .accounts-table td {
+  display: table-cell;
+  width: auto !important;
+  min-width: 0;
+  padding: 8px 7px;
+  border-bottom: 1px solid #edf1f5;
+  white-space: nowrap;
+  overflow: hidden !important;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+#tab-accounts .accounts-table tbody tr:hover td { background: #fbfdff; }
+#tab-accounts .account-row-actions { display: flex; flex-wrap: nowrap; gap: 5px; align-items: center; min-width: max-content; }
+#tab-accounts .account-action-group {
+  display: inline-flex;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  min-height: 0;
+  padding: 3px;
+  gap: 4px;
+  border-radius: 6px;
+}
+#tab-accounts .account-action-group::before { display: none; }
+#tab-accounts .account-secret-cell,
+#tab-accounts .extract-link-cell { flex-wrap: nowrap; white-space: nowrap; }
+#tab-accounts .extract-link-cell { overflow: hidden; }
+#tab-accounts .extract-link-error {
+  flex: 0 1 190px;
+  flex-basis: auto;
+  max-width: 190px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+#tab-accounts .accounts-table .actions button,
+#tab-accounts .account-secret-cell button,
+#tab-accounts .accounts-table .extract-link-btn {
+  min-height: 29px;
+  padding-inline: 8px;
+  font-size: 11px;
+}
+
+/* Public console shell: compact, information-first components. */
+:root {
+  /* Desktop operations need the whole canvas: account rows are deliberately single-line. */
+  --page-max-width: 1840px;
+  --page-gutter: clamp(16px, 2vw, 32px);
+  --bg: #f7f8fa;
+  --surface: #ffffff;
+  --soft: #fbfcfd;
+  --text: #172033;
+  --muted: #768092;
+  --line: #e5e9f0;
+  --blue: #2374e1;
+  --green: #16803c;
+  --red: #c2413a;
+}
+
+body { background: var(--bg); }
+
+header {
+  padding: 0;
+  color: var(--text);
+  text-align: left;
+  background: #fff;
+  border-bottom: 1px solid var(--line);
+}
+
+.header-inner {
+  min-height: 68px;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: nowrap;
+}
+
+header h1 {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: #182235;
+  font-size: 18px;
+  letter-spacing: 0;
+}
+
+header h1::before {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  background: #182235;
+  color: #fff;
+  content: "G";
+  font-size: 13px;
+  font-weight: 900;
+}
+
+header .meta {
+  margin: 2px 0 0 37px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.header-links {
+  position: absolute;
+  top: 22px;
+  right: max(24px, calc((100vw - var(--page-max-width)) / 2));
+  margin: 0;
+}
+
+.header-links a,
+.header-links button {
+  padding: 0 9px;
+  min-height: 28px;
+  color: #526074;
+  border-color: transparent;
+  border-radius: 6px;
+  background: transparent;
+  font-size: 12px;
+}
+
+.header-links a:hover,
+.header-links button:hover { color: #1a63c5; background: #f1f6fe; }
+
+.stats {
+  margin-left: auto;
+  margin-right: 152px;
+  gap: 2px;
+  flex-wrap: nowrap;
+}
+
+.stat {
+  display: flex;
+  align-items: baseline;
+  min-width: auto;
+  padding: 4px 10px;
+  border: 0;
+  border-left: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+}
+
+.stat:first-child { border-left: 0; }
+.stat span { display: inline; color: var(--muted); font-size: 11px; }
+.stat strong { display: inline; margin: 0 0 0 5px; color: #26364e; font-size: 14px; }
+
+nav {
+  background: #fff;
+  border-bottom: 1px solid var(--line);
+}
+
+.nav-inner { justify-content: flex-start; gap: 2px; }
+nav button {
+  min-height: 44px;
+  padding: 0 13px;
+  color: #647188;
+  border-bottom-width: 2px;
+  font-size: 13px;
+}
+nav button:hover { color: #1b5fb9; background: #f7faff; }
+nav button.active { color: #1e66ca; border-bottom-color: #2374e1; }
+
+main { margin-top: 24px; gap: 16px; }
+main > div:not(.hidden) { gap: 16px; }
+
+section.card {
+  overflow: visible;
+  border-color: var(--line);
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+.head { padding: 16px 18px; background: #fff; }
+.head h2, .toolbar h2 { color: #1e293b; font-size: 17px; }
+.head p { color: var(--muted); }
+.body { padding: 16px 18px 18px; }
+
+.toolbar {
+  min-height: 58px;
+  padding: 11px 18px;
+  gap: 12px;
+}
+
+input, textarea, select {
+  border-color: #d9e0e9;
+  background: #fff;
+  box-shadow: inset 0 1px 1px rgba(16,24,40,.02);
+}
+
+input:focus, textarea:focus, select:focus {
+  border-color: #75a9ef;
+  box-shadow: 0 0 0 3px rgba(35,116,225,.12);
+  outline: none;
+}
+
+button.btn, .accounts-toolbar .btn {
+  min-height: 34px;
+  padding-inline: 11px;
+  border-color: #dce3ed;
+  border-radius: 6px;
+  box-shadow: none;
+  font-size: 12px;
+}
+
+button.btn:hover { border-color: #aac7ec; background: #f5f9ff; }
+button.btn.primary { border-color: #2374e1; background: #2374e1; }
+button.btn.primary:hover { background: #1c62c3; }
+button.btn.good { border-color: #b4ddc2; background: #f1fbf4; color: #14713a; }
+button.btn.danger { border-color: #efc2be; background: #fff; color: #b43830; }
+
+.table-wrap { border-top-color: var(--line); }
+th {
+  height: 42px;
+  color: #6b778a;
+  background: #fbfcfe;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+td { color: #26354c; }
+tbody tr { transition: background .12s ease; }
+tbody tr:hover { background: #f7faff; }
+
+.pager-bar { min-height: 54px; padding: 10px 18px; border-top: 1px solid var(--line); }
+.pager-bar button { min-height: 30px; border-radius: 6px; font-size: 12px; }
+
+.runtime-resource {
+  width: 216px;
+  border-color: #d9e2ee;
+  border-radius: 7px;
+  box-shadow: 0 8px 20px rgba(15,23,42,.12);
+}
+
+@media (max-width: 800px) {
+  :root { --page-gutter: 14px; }
+  .header-inner { min-height: auto; padding: 13px 0; flex-wrap: wrap; }
+  .header-links { position: static; order: 3; width: 100%; justify-content: flex-start; }
+  .stats { order: 2; width: 100%; margin: 0; overflow-x: auto; justify-content: flex-start; }
+  .stat { flex: 0 0 auto; }
+  .nav-inner { overflow-x: auto; }
+  nav button { flex: 0 0 auto; padding-inline: 11px; }
+  main { margin-top: 14px; }
+}
