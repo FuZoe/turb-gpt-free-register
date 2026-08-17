@@ -317,24 +317,28 @@
       width: 100%; max-width: 100%; min-width: 0;
       max-height: 320px; overflow: auto; line-height: 1.5;
     }
-    #logPanel, #retryLogPanel, #qrPanel, #secretPanel, #autoTaskPanel, #extractLinkPanel { min-width: 0; max-width: 100%; overflow-x: hidden; }
-    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #qrPanel:not(.hidden), #secretPanel:not(.hidden), #autoTaskPanel:not(.hidden), #extractLinkPanel:not(.hidden) {
+    #logPanel, #retryLogPanel, #failureScreenshotPanel, #qrPanel, #secretPanel, #autoTaskPanel, #extractLinkPanel { min-width: 0; max-width: 100%; overflow-x: hidden; }
+    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #failureScreenshotPanel:not(.hidden), #qrPanel:not(.hidden), #secretPanel:not(.hidden), #autoTaskPanel:not(.hidden), #extractLinkPanel:not(.hidden) {
       position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
       z-index: 1000; display: block; width: min(1100px, calc(100vw - 48px));
       max-height: min(760px, calc(100vh - 48px)); overflow: hidden;
       padding: 16px; border: 1px solid var(--line); border-radius: 12px;
       background: var(--surface); box-shadow: 0 0 0 9999px rgba(15,23,42,.45), 0 24px 70px rgba(15,23,42,.34);
     }
+    #failureScreenshotPanel:not(.hidden) { width: min(1180px, calc(100vw - 32px)); }
     #qrPanel:not(.hidden) { width: min(520px, calc(100vw - 48px)); text-align: center; }
     #secretPanel:not(.hidden) { width: min(560px, calc(100vw - 48px)); }
     #autoTaskPanel:not(.hidden) { width: min(920px, calc(100vw - 32px)); max-height: min(820px, calc(100vh - 32px)); overflow:auto; }
     #extractLinkPanel:not(.hidden) { width: min(620px, calc(100vw - 32px)); }
-    #logPanel h3, #retryLogPanel h3, #qrPanel h3, #secretPanel h3, #autoTaskPanel h3, #extractLinkPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
-    #logPanel h3 .btn, #retryLogPanel h3 .btn, #qrPanel h3 .btn, #secretPanel h3 .btn, #autoTaskPanel h3 .btn, #extractLinkPanel h3 .btn { margin-left:auto; float:none !important; }
+    #logPanel h3, #retryLogPanel h3, #failureScreenshotPanel h3, #qrPanel h3, #secretPanel h3, #autoTaskPanel h3, #extractLinkPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+    #logPanel h3 .btn, #retryLogPanel h3 .btn, #failureScreenshotPanel h3 .btn, #qrPanel h3 .btn, #secretPanel h3 .btn, #autoTaskPanel h3 .btn, #extractLinkPanel h3 .btn { margin-left:auto; float:none !important; }
     .extract-provider-options { display:grid; gap:8px; margin:12px 0; }
     .extract-provider-option { display:flex; gap:9px; align-items:flex-start; padding:11px 12px; border:1px solid var(--line); border-radius:9px; cursor:pointer; }
     .extract-provider-option input { width:auto; min-height:auto; margin-top:3px; }
     #logPanel .log, #retryLogPanel .log { max-height: calc(min(760px, calc(100vh - 48px)) - 74px); margin-top:0; }
+    .failure-screenshot-stage { display:grid; place-items:center; min-height:220px; max-height:calc(100vh - 150px); overflow:auto; border:1px solid var(--line); border-radius:8px; background:#eef2f6; }
+    #failureScreenshotImage { display:block; max-width:100%; height:auto; background:#fff; }
+    #failureScreenshotHint { margin-top:8px; color:var(--muted); font-size:12px; }
     #qrPanel img { display:block; max-width:min(360px, calc(100vw - 96px)); max-height:420px; margin:12px auto; border:1px solid var(--line); border-radius:10px; background:#fff; }
     #qrPanel .qr-link { display:block; word-break:break-all; white-space:normal; font-size:12px; color:var(--muted); margin-top:8px; }
     .account-secret-cell { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
@@ -564,6 +568,13 @@
       <div class="body hidden" id="logPanel">
         <h3>任务 #<span id="logJobId"></span> 日志 <button class="btn" id="btnCloseLog" style="float:right;min-height:28px;">关闭</button></h3>
         <div class="log" id="logContent">加载中…</div>
+      </div>
+      <div class="body hidden" id="failureScreenshotPanel">
+        <h3>任务 #<span id="failureScreenshotJobId"></span> 失败现场 <button class="btn" id="btnCloseFailureScreenshot">关闭</button></h3>
+        <div class="failure-screenshot-stage">
+          <img id="failureScreenshotImage" alt="任务失败现场截图">
+        </div>
+        <div id="failureScreenshotHint">正在加载原始截图…</div>
       </div>
     </section>
   </div>
@@ -1171,6 +1182,7 @@ function renderJobs() {
       <td class="muted wrap" title="${esc(j.error_message || '')}">${esc(short(j.error_message || '', 90))}</td>
       <td class="actions-cell">
         <div class="actions job-actions">
+          ${j.status === 'failed' ? `<button data-failure-shot-job="${esc(j.id)}" title="查看该任务最后保存的失败现场截图">失败现场</button>` : ''}
           <button data-log-job="${esc(j.id)}">补跑日志</button>
           ${j.status === 'running' && j.email && j.manual_otp_required ? `
             <input class="manual-otp-input" data-otp-email="${esc(j.email)}" data-otp-job="${esc(j.id)}" placeholder="邮箱验证码" maxlength="8" style="width:96px;min-height:28px;padding:2px 6px;" title="手动模式下，打开邮箱后把 6 位验证码贴这里">
@@ -1244,7 +1256,7 @@ async function refreshJobs(showLoading = false) {
 
 let modalScrollY = 0;
 function updateModalScrollLock() {
-  const opened = !$('#logPanel').classList.contains('hidden') || !$('#retryLogPanel').classList.contains('hidden') || !$('#qrPanel').classList.contains('hidden') || !$('#secretPanel').classList.contains('hidden') || !$('#autoTaskPanel').classList.contains('hidden') || !$('#extractLinkPanel').classList.contains('hidden');
+  const opened = !$('#logPanel').classList.contains('hidden') || !$('#retryLogPanel').classList.contains('hidden') || !$('#failureScreenshotPanel').classList.contains('hidden') || !$('#qrPanel').classList.contains('hidden') || !$('#secretPanel').classList.contains('hidden') || !$('#autoTaskPanel').classList.contains('hidden') || !$('#extractLinkPanel').classList.contains('hidden');
   const locked = document.body.classList.contains('modal-open');
   if (opened && !locked) {
     modalScrollY = window.scrollY || document.documentElement.scrollTop || 0;
@@ -1263,6 +1275,37 @@ function closeLogModal() {
   clearInterval(logTimer);
   $('#logPanel').classList.add('hidden');
   updateModalScrollLock();
+}
+let failureScreenshotObjectUrl = '';
+function closeFailureScreenshotModal() {
+  $('#failureScreenshotPanel').classList.add('hidden');
+  $('#failureScreenshotImage').removeAttribute('src');
+  if (failureScreenshotObjectUrl) URL.revokeObjectURL(failureScreenshotObjectUrl);
+  failureScreenshotObjectUrl = '';
+  updateModalScrollLock();
+}
+async function openFailureScreenshot(jobId, btn) {
+  btn.disabled = true;
+  try {
+    const response = await fetch(`/api/jobs/${jobId}/failure-screenshot`, {credentials:'same-origin', cache:'no-store'});
+    if (!response.ok) {
+      const detail = await response.json().catch(() => ({}));
+      throw new Error(detail.error || `HTTP ${response.status}`);
+    }
+    const blob = await response.blob();
+    if (!blob.type.startsWith('image/')) throw new Error('服务端返回的内容不是图片');
+    if (failureScreenshotObjectUrl) URL.revokeObjectURL(failureScreenshotObjectUrl);
+    failureScreenshotObjectUrl = URL.createObjectURL(blob);
+    $('#failureScreenshotJobId').textContent = jobId;
+    $('#failureScreenshotImage').src = failureScreenshotObjectUrl;
+    $('#failureScreenshotHint').textContent = `原始截图 · ${Math.max(1, Math.round(blob.size / 1024))} KB`;
+    $('#failureScreenshotPanel').classList.remove('hidden');
+    updateModalScrollLock();
+  } catch (error) {
+    showToast('读取失败现场失败: ' + error.message);
+  } finally {
+    btn.disabled = false;
+  }
 }
 function closeRetryLogModal() {
   retryLogEmail = null;
@@ -1593,6 +1636,11 @@ $('#jobsBody').addEventListener('pointerdown', (e) => {
 });
 
 $('#jobsBody').addEventListener('click', (e) => {
+  const failureShotBtn = e.target.closest('[data-failure-shot-job]');
+  if (failureShotBtn) {
+    openFailureScreenshot(parseInt(failureShotBtn.dataset.failureShotJob, 10), failureShotBtn);
+    return;
+  }
   const logBtn = e.target.closest('[data-log-job]');
   if (logBtn) {
     openLog(parseInt(logBtn.dataset.logJob, 10));
@@ -1654,6 +1702,7 @@ $('#jobsBody').addEventListener('change', (e) => {
   updateJobsSelectionUi();
 });
 $('#btnCloseLog').addEventListener('click', closeLogModal);
+$('#btnCloseFailureScreenshot').addEventListener('click', closeFailureScreenshotModal);
 
 async function stopJob(jobId, btn) {
   const job = JOBS.find(j => Number(j.id) === Number(jobId));
