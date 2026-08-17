@@ -17,9 +17,10 @@ import re
 import threading
 import time
 import uuid
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from flask import Flask, Response, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request, send_file
 
 from core import (
     codex_agent_service,
@@ -197,6 +198,45 @@ def _compact_job_for_list(row: dict) -> dict:
         # 列表只需要摘要；完整错误和堆栈看“补跑日志”。
         out["error_message"] = err[:240] + ("…" if len(err) > 240 else "")
     return out
+
+
+_FAILURE_SCREENSHOT_RE = re.compile(
+    r"(?:失败现场截图|failure screenshot|screenshot)\s*[:：]\s*([^\r\n]+?\.(?:png|jpe?g|webp))",
+    re.IGNORECASE,
+)
+
+
+def _job_failure_screenshot(row: dict) -> Path | None:
+    """Return the last screenshot referenced by this job's own log."""
+    raw_log_file = str(row.get("log_file") or "").strip()
+    if not raw_log_file:
+        return None
+    log_file = Path(raw_log_file).expanduser()
+    if not log_file.is_file():
+        return None
+
+    try:
+        size = log_file.stat().st_size
+        with log_file.open("rb") as handle:
+            if size > 200_000:
+                handle.seek(size - 200_000)
+            log_text = handle.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+
+    log_root = log_file.resolve().parent
+    for raw_path in reversed(_FAILURE_SCREENSHOT_RE.findall(log_text)):
+        candidate = Path(raw_path.strip().strip("\"'"))
+        if not candidate.is_absolute():
+            candidate = log_root / candidate
+        try:
+            resolved = candidate.resolve()
+            resolved.relative_to(log_root)
+        except (OSError, ValueError):
+            continue
+        if resolved.is_file():
+            return resolved
+    return None
 
 
 def _job_status_counts(rows: list[dict]) -> dict:
@@ -2506,6 +2546,29 @@ def create_app(auth_code: str | None = None) -> Flask:
             "job": job,
             "log": svc.read_job_log(job_id),
         })
+
+    @app.get("/api/jobs/<int:job_id>/failure-screenshot")
+    def api_job_failure_screenshot(job_id: int):
+        job = db.get_job(job_id)
+        if not job:
+            return jsonify({"ok": False, "error": "任务不存在"}), 404
+        screenshot = _job_failure_screenshot(job)
+        if screenshot is None:
+            return jsonify({"ok": False, "error": "该任务没有保存失败现场截图"}), 404
+        mimetype = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".webp": "image/webp",
+        }.get(screenshot.suffix.lower(), "application/octet-stream")
+        return send_file(
+            screenshot,
+            mimetype=mimetype,
+            as_attachment=False,
+            download_name=f"job-{job_id}-failure{screenshot.suffix.lower()}",
+            conditional=True,
+            max_age=0,
+        )
 
     # ----------------------------------------------------------
     # RoxyBrowser 辅助接口
